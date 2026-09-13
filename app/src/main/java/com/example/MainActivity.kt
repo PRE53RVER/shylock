@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -30,6 +31,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -71,7 +74,9 @@ import com.example.ui.theme.AppTheme
 import com.example.ui.theme.GlassCard
 import com.example.ui.theme.Typography
 import com.example.ui.theme.accentGlow
+import com.example.ui.theme.glassShadowColor
 import com.example.ui.theme.liquidGlass
+import com.example.ui.theme.softShadow
 import androidx.compose.ui.graphics.luminance
 import com.example.ui.theme.IncomeGreen
 import com.example.ui.theme.IncomeGreenContainer
@@ -487,15 +492,15 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                 .accentGlow(
                                     color = MaterialTheme.colorScheme.primary,
                                     shape = CircleShape,
-                                    elevation = 22.dp
+                                    elevation = 10.dp
                                 )
-                                .size(62.dp)
+                                .size(52.dp)
                                 .testTag("add_transaction_btn")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = "Add New Record",
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
                         }
                     }
@@ -517,16 +522,22 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     },
         bottomBar = {
             if (currentRoute != "onboarding" && !isLendingScreen) {
-                val navShape = RoundedCornerShape(28.dp)
+                val navShape = RoundedCornerShape(26.dp)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .navigationBarsPadding()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp)
                         .liquidGlass(shape = navShape, elevation = 10.dp)
                 ) {
+                    // NavigationBar normally absorbs the gesture-bar inset inside its own height,
+                    // which squashed the items against the top rim. Insets are handled by the
+                    // outer Box above, so the whole 68dp here is content and items centre properly.
                     NavigationBar(
                         containerColor = Color.Transparent,
-                        tonalElevation = 0.dp
+                        tonalElevation = 0.dp,
+                        windowInsets = WindowInsets(0.dp),
+                        modifier = Modifier.height(68.dp)
                     ) {
                         val navItems = listOf(
                             Triple("home", Icons.Default.Home, "Home"),
@@ -551,7 +562,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                     Text(
                                         label,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        fontSize = 12.sp
+                                        fontSize = 11.sp
                                     )
                                 },
                                 colors = NavigationBarItemDefaults.colors(
@@ -583,8 +594,8 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 80.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                        .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 84.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                 // Branded header — scrolls away with the content to free up the viewport
                 ShylockBrandHeader()
@@ -791,16 +802,16 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                         // Recent Transaction list using Category Colors consistently
                         GlassCard(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(28.dp),
+                            shape = RoundedCornerShape(24.dp),
                             elevation = 6.dp,
-                            contentPadding = PaddingValues(top = 18.dp, bottom = 8.dp)
+                            contentPadding = PaddingValues(top = 14.dp, bottom = 10.dp)
                         ) {
                             Column {
                                 // Header row with Title and "View All" toggle button
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 18.dp),
+                                        .padding(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -809,12 +820,12 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                             text = "Recent Transactions",
                                             style = MaterialTheme.typography.titleLarge,
                                             fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 20.sp,
+                                            fontSize = 18.sp,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
                                             text = "${monthTransactions.size} total this month",
-                                            style = MaterialTheme.typography.labelMedium,
+                                            style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.outline
                                         )
                                     }
@@ -826,20 +837,20 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                         Text(
                                             text = if (isViewAllTransactions) "Show Recent" else "View All",
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
+                                            fontSize = 13.sp,
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                         Spacer(modifier = Modifier.width(2.dp))
                                         Icon(
                                             imageVector = if (isViewAllTransactions) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                                             contentDescription = null,
-                                            modifier = Modifier.size(18.dp),
+                                            modifier = Modifier.size(16.dp),
                                             tint = MaterialTheme.colorScheme.primary
                                         )
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(14.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
 
                                 val filtersActive = selectedTypeFilter != "ALL" || searchQuery.isNotBlank()
 
@@ -847,8 +858,8 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 18.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        .padding(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     GlassSearchField(
@@ -859,10 +870,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                             .testTag("transaction_search_input")
                                     )
 
-                                    val filterShape = RoundedCornerShape(18.dp)
+                                    val filterShape = RoundedCornerShape(13.dp)
                                     Box(
                                         modifier = Modifier
-                                            .size(56.dp)
+                                            .size(38.dp)
                                             .liquidGlass(shape = filterShape, strength = 0.7f)
                                             .clickable { showTypeFilters = !showTypeFilters }
                                             .testTag("transaction_filter_toggle"),
@@ -875,14 +886,14 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                                 MaterialTheme.colorScheme.primary
                                             else
                                                 MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(22.dp)
+                                            modifier = Modifier.size(19.dp)
                                         )
                                         if (filtersActive) {
                                             Box(
                                                 modifier = Modifier
                                                     .align(Alignment.TopEnd)
-                                                    .padding(top = 12.dp, end = 12.dp)
-                                                    .size(7.dp)
+                                                    .padding(top = 7.dp, end = 7.dp)
+                                                    .size(6.dp)
                                                     .clip(CircleShape)
                                                     .background(MaterialTheme.colorScheme.primary)
                                             )
@@ -895,9 +906,9 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(horizontal = 18.dp)
-                                            .padding(top = 12.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            .padding(horizontal = 16.dp)
+                                            .padding(top = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         listOf("ALL" to "All", "EXPENSE" to "Expenses", "INCOME" to "Income").forEach { (filterVal, label) ->
                                             val accent = when (filterVal) {
@@ -916,7 +927,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(6.dp))
+                                Spacer(modifier = Modifier.height(10.dp))
 
                                 // Transaction Filtering based on Highlighted Category, searchQuery, and selectedTypeFilter within the selected month
                                 val filteredTransactions = remember(monthTransactions, selectedCatId, searchQuery, selectedTypeFilter) {
@@ -944,7 +955,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(vertical = 32.dp, horizontal = 18.dp),
+                                            .padding(vertical = 28.dp, horizontal = 16.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
                                         Box(
@@ -970,16 +981,24 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                         )
                                     }
                                 } else {
-                                    // Flat, divider-separated rows so the glass panel reads as one
-                                    // continuous surface instead of a stack of nested cards
-                                    Column(modifier = Modifier.animateContentSize()) {
+                                    // Divider-separated rows inside one faint tray, so the list reads
+                                    // as a single grouped surface rather than a stack of nested cards
+                                    val trayShape = RoundedCornerShape(18.dp)
+                                    Column(
+                                        modifier = Modifier
+                                            .padding(horizontal = 10.dp)
+                                            .clip(trayShape)
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.22f))
+                                            .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f), trayShape)
+                                            .animateContentSize()
+                                    ) {
                                         displayedTransactions.forEachIndexed { index, tx ->
                                             val cat = categories.find { it.id == tx.categoryId }
                                             val sub = subcategories.find { it.id == tx.subcategoryId }
                                             val isLinked = tx.lendingEntryId != null
                                             if (index > 0) {
                                                 HorizontalDivider(
-                                                    modifier = Modifier.padding(horizontal = 18.dp),
+                                                    modifier = Modifier.padding(horizontal = 12.dp),
                                                     thickness = 0.7.dp,
                                                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
                                                 )
@@ -2604,7 +2623,7 @@ fun ShylockBrandHeader(modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
+            .padding(vertical = 0.dp)
             .testTag("brand_header"),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -2613,16 +2632,16 @@ fun ShylockBrandHeader(modifier: Modifier = Modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "SHY",
-                    fontSize = 26.sp,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 3.sp,
+                    letterSpacing = 6.sp,
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
                     text = "LOCK",
-                    fontSize = 26.sp,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Black,
-                    letterSpacing = 3.sp,
+                    letterSpacing = 6.sp,
                     color = MaterialTheme.colorScheme.primary
                 )
             }
@@ -2650,7 +2669,7 @@ fun ShylockBrandHeader(modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.width(10.dp))
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(38.dp)
                     .liquidGlass(shape = CircleShape, strength = 0.9f),
                 contentAlignment = Alignment.Center
             ) {
@@ -2658,61 +2677,83 @@ fun ShylockBrandHeader(modifier: Modifier = Modifier) {
                     imageVector = Icons.Default.Person,
                     contentDescription = "Profile",
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
     }
 }
 
-// Pill-shaped glass search input used in the transactions panel
+// Pill-shaped glass search input used in the transactions panel.
+// Built on BasicTextField because OutlinedTextField enforces a 56dp minimum height,
+// which is taller than the rest of the panel's controls.
 @Composable
 fun GlassSearchField(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = {
-            Text(
-                "Search description or amount...",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        leadingIcon = {
-            Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search icon",
-                tint = MaterialTheme.colorScheme.primary
-            )
-        },
-        modifier = modifier,
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium,
-        trailingIcon = if (value.isNotEmpty()) {
-            {
-                IconButton(onClick = { onValueChange("") }) {
-                    Icon(
-                        imageVector = Icons.Default.Clear,
-                        contentDescription = "Clear search",
-                        tint = MaterialTheme.colorScheme.outline
-                    )
+    var focused by remember { mutableStateOf(false) }
+    val borderColor = if (focused)
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+    else
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+    val containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (focused) 0.55f else 0.35f)
+
+    Row(
+        modifier = modifier
+            .height(38.dp)
+            .clip(CircleShape)
+            .background(containerColor)
+            .border(0.8.dp, borderColor, CircleShape)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = "Search icon",
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { focused = it.isFocused },
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(
+                            "Search description or amount...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    innerTextField()
                 }
             }
-        } else null,
-        shape = CircleShape,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-            unfocusedContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
-            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
         )
-    )
+        if (value.isNotEmpty()) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Icon(
+                imageVector = Icons.Default.Clear,
+                contentDescription = "Clear search",
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .clickable { onValueChange("") }
+            )
+        }
+    }
 }
 
 // Glowing filled pill when selected, quiet glass when not
@@ -2726,8 +2767,8 @@ fun TypeFilterPill(
 ) {
     val shape = CircleShape
     val base = modifier
-        .height(44.dp)
-        .then(if (selected) Modifier.accentGlow(accent.copy(alpha = 0.9f), shape, 14.dp) else Modifier)
+        .height(32.dp)
+        .then(if (selected) Modifier.accentGlow(accent, shape, 6.dp) else Modifier)
 
     Box(
         modifier = if (selected) {
@@ -2735,9 +2776,10 @@ fun TypeFilterPill(
                 .clip(shape)
                 .background(
                     Brush.horizontalGradient(
-                        listOf(accent.copy(alpha = 0.95f), accent)
+                        listOf(lerp(accent, Color.Black, 0.12f), lerp(accent, Color.Black, 0.48f))
                     )
                 )
+                .border(0.8.dp, accent.copy(alpha = 0.55f), shape)
                 .clickable { onClick() }
         } else {
             base
@@ -2748,9 +2790,9 @@ fun TypeFilterPill(
     ) {
         Text(
             text = label,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) getContrastColorFor(accent) else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -2790,26 +2832,27 @@ fun MonthNavigationBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .liquidGlass(shape = CircleShape, elevation = 4.dp)
+            .liquidGlass(shape = RoundedCornerShape(18.dp), elevation = 4.dp)
             .testTag("month_navigation_bar")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 6.dp),
+                .padding(horizontal = 6.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
                 onClick = onPrevMonth,
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(36.dp)
                     .testTag("prev_month_btn")
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                     contentDescription = "Previous Month",
-                    tint = MaterialTheme.colorScheme.onSurface
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(22.dp)
                 )
             }
 
@@ -2817,14 +2860,14 @@ fun MonthNavigationBar(
                 modifier = Modifier
                     .clip(CircleShape)
                     .clickable { onLabelClick() }
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
                     .testTag("month_label_button"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.CalendarMonth,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(17.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -2834,11 +2877,11 @@ fun MonthNavigationBar(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
+                    imageVector = Icons.Default.ExpandMore,
                     contentDescription = "Open month selector",
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -2847,13 +2890,14 @@ fun MonthNavigationBar(
                 onClick = onNextMonth,
                 enabled = !isCurrentMonth,
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(36.dp)
                     .testTag("next_month_btn")
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = "Next Month",
-                    tint = if (!isCurrentMonth) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
+                    tint = if (!isCurrentMonth) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
@@ -2974,9 +3018,9 @@ fun DashboardHeader(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("dashboard_header_card"),
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(24.dp),
         elevation = 8.dp,
-        contentPadding = PaddingValues(20.dp)
+        contentPadding = PaddingValues(16.dp)
     ) {
         // Top row: Title and Categories pill
         Row(
@@ -2988,7 +3032,7 @@ fun DashboardHeader(
                 text = title,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.ExtraBold,
-                fontSize = 20.sp,
+                fontSize = 18.sp,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Box(
@@ -2996,15 +3040,15 @@ fun DashboardHeader(
             ) {
                 Text(
                     text = "$categoriesCount Categories",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Balance block on the left, spend rhythm sparkline on the right
         Row(
@@ -3014,23 +3058,26 @@ fun DashboardHeader(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Net Balance",
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Medium
                 )
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(1.dp))
+                val balanceColor = if (netBalance >= 0.0) MaterialTheme.colorScheme.primary else ExpenseRed
                 Text(
                     text = formatInRupee(netBalance, currency = currencySymbol),
                     style = MaterialTheme.typography.headlineLarge,
-                    fontSize = 34.sp,
+                    fontSize = 32.sp,
+                    lineHeight = 38.sp,
                     fontWeight = FontWeight.Black,
-                    color = if (netBalance >= 0.0) MaterialTheme.colorScheme.primary else ExpenseRed,
+                    letterSpacing = (-0.5).sp,
+                    color = balanceColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
 
+                Spacer(modifier = Modifier.height(6.dp))
                 if (formattedPercent != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
                             shape = CircleShape,
@@ -3038,18 +3085,18 @@ fun DashboardHeader(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Icon(
                                     imageVector = if (isSpendingUp) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
                                     contentDescription = null,
                                     tint = if (isSpendingUp) ExpenseRed else IncomeGreen,
-                                    modifier = Modifier.size(13.dp)
+                                    modifier = Modifier.size(12.dp)
                                 )
                                 Spacer(modifier = Modifier.width(3.dp))
                                 Text(
                                     text = "$formattedPercent%",
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isSpendingUp) ExpenseRed else IncomeGreen
                                 )
@@ -3058,7 +3105,23 @@ fun DashboardHeader(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "vs last month",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    // Same slot as the MoM pill so the card keeps one height either way
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = "Comparison",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "No prior month to compare",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -3069,26 +3132,26 @@ fun DashboardHeader(
                 Column(horizontalAlignment = Alignment.End) {
                     SpendRhythmBars(
                         values = sparkline,
-                        modifier = Modifier.size(width = 108.dp, height = 52.dp)
+                        modifier = Modifier.size(width = 112.dp, height = 44.dp)
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Smaller steps,\nbigger freedom",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.End,
-                        lineHeight = 13.sp
+                        lineHeight = 12.sp
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Two nested glass tiles: Income & Expenses
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             SummaryTile(
                 modifier = Modifier.weight(1f),
@@ -3109,31 +3172,6 @@ fun DashboardHeader(
                 icon = Icons.Default.ArrowDownward
             )
         }
-
-        // The MoM pill above already carries the comparison when prior data exists, so this
-        // line only appears when there is nothing to compare against.
-        if (formattedPercent == null) {
-            Spacer(modifier = Modifier.height(14.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.History,
-                    contentDescription = "Comparison",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "No spending in prior month to compare",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
     }
 }
 
@@ -3148,51 +3186,51 @@ private fun SummaryTile(
     icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    Row(
         modifier = modifier
-            .liquidGlass(shape = RoundedCornerShape(20.dp), tint = accent, strength = 0.75f)
-            .padding(14.dp)
+            .liquidGlass(shape = RoundedCornerShape(16.dp), tint = accent, strength = 0.75f)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(accentContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = accent,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = amount,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = accent,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(accentContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = accent,
+                modifier = Modifier.size(18.dp)
+            )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = "$count ${if (count == 1) "transaction" else "transactions"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline
-        )
+        Spacer(modifier = Modifier.width(9.dp))
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                lineHeight = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = amount,
+                fontSize = 16.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "$count ${if (count == 1) "transaction" else "transactions"}",
+                style = MaterialTheme.typography.labelSmall,
+                lineHeight = 13.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
     }
 }
 
@@ -3208,10 +3246,11 @@ private fun SpendRhythmBars(
 
     Canvas(modifier = modifier) {
         if (values.isEmpty()) return@Canvas
-        val gap = size.width * 0.028f
+        val gap = size.width * 0.04f
         val barWidth = (size.width - gap * (values.size - 1)) / values.size
         val radius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f, barWidth / 2f)
-        val minHeight = barWidth.coerceAtMost(size.height)
+        // Empty buckets still get a short stub so the chart keeps its silhouette
+        val minHeight = (size.height * 0.18f).coerceAtLeast(barWidth)
 
         values.forEachIndexed { index, value ->
             val ratio = if (peak > 0.0) (value / peak).toFloat() else 0f
@@ -3677,7 +3716,7 @@ fun DetailedStatsPanel(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(4.dp, RoundedCornerShape(16.dp))
+            .softShadow(RoundedCornerShape(16.dp), 4.dp, glassShadowColor())
             .testTag("detailed_stats_panel"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = parseHexColor(category.colorHex).copy(alpha = 0.08f)),
@@ -4244,7 +4283,7 @@ fun TransactionItemRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (!effectiveReadOnly) Modifier.clickable { onEdit() } else Modifier)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -4255,7 +4294,7 @@ fun TransactionItemRow(
             // Circular category badge — the app's colour system, carried through to every row
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(parseHexColor(visualColor)),
                 contentAlignment = Alignment.Center
@@ -4264,28 +4303,30 @@ fun TransactionItemRow(
                     imageVector = getIconVector(category?.iconName ?: "help"),
                     contentDescription = category?.displayName ?: "Unknown category",
                     tint = getContrastColor(visualColor),
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(modifier = Modifier.width(11.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = transaction.description.ifEmpty { "Transaction Record" },
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(3.dp))
+                Spacer(modifier = Modifier.height(2.dp))
 
                 // Category · subcategory · when, as one quiet metadata line
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = category?.displayName ?: "Unknown",
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = parseHexColor(catColor),
                         maxLines = 1,
@@ -4295,7 +4336,8 @@ fun TransactionItemRow(
                     if (subcategory != null) {
                         Text(
                             text = " · ${subcategory.name}",
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
                             color = parseHexColor(subcategory.colorHexOverride ?: catColor),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -4304,7 +4346,8 @@ fun TransactionItemRow(
                     }
                     Text(
                         text = " • ${formatTransactionDate(transaction.timestamp)}",
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
                         color = MaterialTheme.colorScheme.outline,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -4341,20 +4384,21 @@ fun TransactionItemRow(
             Text(
                 text = "$prefix${formatInRupee(transaction.amount, currency = currency)}",
                 fontWeight = FontWeight.Black,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 color = amountColor,
                 maxLines = 1
             )
             if (!effectiveReadOnly) {
+                Spacer(modifier = Modifier.width(2.dp))
                 IconButton(
                     onClick = onDelete,
-                    modifier = Modifier.size(36.dp).testTag("delete_transaction_btn")
+                    modifier = Modifier.size(30.dp).testTag("delete_transaction_btn")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Delete",
                         tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }

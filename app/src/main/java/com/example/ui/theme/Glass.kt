@@ -1,5 +1,7 @@
 package com.example.ui.theme
 
+import android.graphics.BlurMaskFilter
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -15,11 +17,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.PaintingStyle
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
@@ -50,10 +61,10 @@ fun appBackgroundBrush(): Brush {
         )
     } else {
         Brush.verticalGradient(
-            0f to lerp(scheme.background, scheme.primary, 0.14f),
-            0.30f to lerp(scheme.background, scheme.primary, 0.05f),
+            0f to lerp(scheme.background, scheme.primary, 0.16f),
+            0.30f to lerp(scheme.background, scheme.primary, 0.07f),
             0.70f to scheme.background,
-            1f to lerp(scheme.background, Color.Black, 0.55f)
+            1f to lerp(scheme.background, Color.Black, 0.25f)
         )
     }
 }
@@ -78,11 +89,11 @@ fun AppBackground(
             .background(base)
             .drawBehind {
                 val topCenter = Offset(size.width * 0.15f, size.height * 0.02f)
-                val topRadius = size.width * 1.05f
+                val topRadius = size.width * 0.95f
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            accent.copy(alpha = if (light) 0.18f else 0.15f),
+                            accent.copy(alpha = if (light) 0.18f else 0.20f),
                             Color.Transparent
                         ),
                         center = topCenter,
@@ -93,11 +104,11 @@ fun AppBackground(
                 )
 
                 val lowCenter = Offset(size.width * 0.95f, size.height * 0.62f)
-                val lowRadius = size.width * 0.85f
+                val lowRadius = size.width * 0.80f
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            secondary.copy(alpha = if (light) 0.10f else 0.08f),
+                            secondary.copy(alpha = if (light) 0.10f else 0.10f),
                             Color.Transparent
                         ),
                         center = lowCenter,
@@ -126,11 +137,12 @@ fun glassFill(
         1f to tint.copy(alpha = 0.10f * strength)
     )
 } else {
+    val pane = lerp(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.primary, 0.05f)
     Brush.linearGradient(
-        0f to Color.White.copy(alpha = 0.08f * strength),
-        0.30f to MaterialTheme.colorScheme.surface.copy(alpha = 0.62f * strength),
-        0.75f to MaterialTheme.colorScheme.surface.copy(alpha = 0.48f * strength),
-        1f to tint.copy(alpha = 0.09f * strength)
+        0f to lerp(pane, Color.White, 0.06f).copy(alpha = 0.76f * strength),
+        0.30f to pane.copy(alpha = 0.70f * strength),
+        0.75f to pane.copy(alpha = 0.60f * strength),
+        1f to lerp(pane, tint, 0.12f).copy(alpha = 0.66f * strength)
     )
 }
 
@@ -147,14 +159,75 @@ fun glassBorder(strength: Float = 1f): Brush = if (isLightScheme()) {
 } else {
     Brush.linearGradient(
         listOf(
-            Color.White.copy(alpha = 0.24f * strength),
-            Color.White.copy(alpha = 0.05f * strength),
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.20f * strength)
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.42f * strength),
+            Color.White.copy(alpha = 0.08f * strength),
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f * strength)
         )
     )
 }
 
-/** Applies fill + rim (+ optional drop shadow) in the right draw order. */
+/**
+ * Soft drop shadow painted strictly *outside* [shape].
+ *
+ * The platform elevation shadow ([Modifier.shadow]) assumes an opaque caster: it only paints a
+ * band around the edges and leaves the inset interior unshaded. Under a translucent glass fill
+ * that band bleeds through as a hard-edged lighter rectangle inside every card. Drawing the
+ * shadow ourselves and clipping the pane out of it means nothing is ever painted beneath the
+ * glass, so the surface stays uniform and the shadow is a clean blurred halo.
+ */
+fun Modifier.softShadow(
+    shape: Shape,
+    elevation: Dp,
+    shadowColor: Color
+): Modifier = if (elevation <= 0.dp) this else drawWithCache {
+    val elevationPx = elevation.toPx()
+    val blurRadius = elevationPx * 1.75f
+    val yOffset = elevationPx * 0.55f
+    val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
+    val canBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+    val paint = Paint().apply {
+        color = shadowColor
+        isAntiAlias = true
+        if (canBlur) {
+            asFrameworkPaint().maskFilter = BlurMaskFilter(blurRadius, BlurMaskFilter.Blur.NORMAL)
+        }
+    }
+    // Hardware canvases ignore mask filters before API 28, so fake the blur with concentric
+    // strokes of decreasing alpha. Overlapping rings fall off naturally with distance.
+    val fallbackRings = 8
+    val fallbackPaints = if (canBlur) emptyList() else List(fallbackRings) { i ->
+        Paint().apply {
+            color = shadowColor.copy(alpha = shadowColor.alpha / fallbackRings)
+            isAntiAlias = true
+            style = PaintingStyle.Stroke
+            strokeWidth = 2f * blurRadius * (i + 1) / fallbackRings
+        }
+    }
+
+    onDrawBehind {
+        clipPath(path, ClipOp.Difference) {
+            translate(top = yOffset) {
+                drawIntoCanvas { canvas ->
+                    if (canBlur) {
+                        canvas.drawPath(path, paint)
+                    } else {
+                        fallbackPaints.forEach { canvas.drawPath(path, it) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Shadow tint that suits the current scheme: cool and light on light, an accent bleed on dark. */
+@Composable
+fun glassShadowColor(): Color = if (isLightScheme()) {
+    lerp(Color.Black, MaterialTheme.colorScheme.primary, 0.35f).copy(alpha = 0.16f)
+} else {
+    lerp(Color.Black, MaterialTheme.colorScheme.primary, 0.15f).copy(alpha = 0.34f)
+}
+
+/** Applies shadow + fill + rim in the right draw order. */
 @Composable
 fun Modifier.liquidGlass(
     shape: Shape = RoundedCornerShape(24.dp),
@@ -165,8 +238,9 @@ fun Modifier.liquidGlass(
 ): Modifier {
     val fill = glassFill(tint, strength)
     val rim = glassBorder(strength)
+    val shadow = glassShadowColor()
     return this
-        .then(if (elevation > 0.dp) Modifier.shadow(elevation, shape, clip = false) else Modifier)
+        .softShadow(shape, elevation, shadow)
         .clip(shape)
         .background(fill)
         .border(borderWidth, rim, shape)
@@ -177,12 +251,10 @@ fun Modifier.accentGlow(
     color: Color,
     shape: Shape,
     elevation: Dp = 16.dp
-): Modifier = this.shadow(
-    elevation = elevation,
+): Modifier = this.softShadow(
     shape = shape,
-    clip = false,
-    ambientColor = color,
-    spotColor = color
+    elevation = elevation,
+    shadowColor = color.copy(alpha = 0.30f)
 )
 
 /** Convenience wrapper for the common "glass panel with padding" case. */
