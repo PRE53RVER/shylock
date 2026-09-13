@@ -25,6 +25,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -52,6 +53,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -76,8 +78,13 @@ import com.example.ui.theme.Typography
 import com.example.ui.theme.accentGlow
 import com.example.ui.theme.glassShadowColor
 import com.example.ui.theme.liquidGlass
+import com.example.ui.theme.selectedPillBrush
+import com.example.ui.theme.selectedPillRim
 import com.example.ui.theme.softShadow
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import com.example.ui.theme.IncomeGreen
 import com.example.ui.theme.IncomeGreenContainer
 import com.example.ui.theme.ExpenseRed
@@ -448,9 +455,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
         contentColor = MaterialTheme.colorScheme.onBackground,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            // Home hosts its own branded header inside the scroll body so it can scroll away and
-            // hand the whole viewport back to content; the other tabs keep a lightweight title.
-            if (currentRoute != "onboarding" && currentRoute != "home" && !isLendingScreen) {
+            // Home and Insights host their own branded headers inside the scroll body so they can
+            // scroll away and hand the whole viewport back to content; the other tabs keep a
+            // lightweight title.
+            if (currentRoute != "onboarding" && currentRoute != "home" && currentRoute != "insights" && !isLendingScreen) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
@@ -541,7 +549,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     ) {
                         val navItems = listOf(
                             Triple("home", Icons.Default.Home, "Home"),
-                            Triple("insights", Icons.Default.TrendingUp, "Insights"),
+                            Triple("insights", Icons.Default.BarChart, "Insights"),
                             Triple("settings", Icons.Default.Settings, "Settings")
                         )
                         navItems.forEach { (route, icon, label) ->
@@ -1058,210 +1066,238 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
         }
 
         composable("insights") {
-        val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-                // Month Navigation Controls (shared across Home and Insights)
-                MonthNavigationBar(
-                    selectedMonth = selectedMonth,
-                    isCurrentMonth = isCurrentCalendarMonth,
-                    onPrevMonth = { viewModel.selectMonth(selectedMonth.minusMonths(1)) },
-                    onNextMonth = { viewModel.selectMonth(selectedMonth.plusMonths(1)) },
-                    onLabelClick = { showMonthPickerSheet = true },
-                    modifier = Modifier.testTag("insights_month_navigation_bar")
-                )
+            val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
+            val lastPeriodSpend = remember(periodStats) { periodStats.values.sumOf { it.previousMonthTotal } }
+            val periodSparkline = remember(filteredTrendTransactions, selectedAnalysisPeriod, selectedMonth) {
+                buildPeriodSparkline(filteredTrendTransactions, selectedAnalysisPeriod, selectedMonth)
+            }
+            val topCategory = remember(periodStats, categories) {
+                periodStats.values
+                    .filter { it.totalAmount > 0.0 }
+                    .maxByOrNull { it.totalAmount }
+                    ?.let { top -> categories.find { it.id == top.categoryId }?.let { cat -> cat to top } }
+            }
 
-                // Past month indicator banner if viewing a past month
-                if (isPastCalendarMonth) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("insights_past_month_banner"),
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.History,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Viewing insights for ${selectedMonth.format(monthFormatter)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        }
-                    }
-                }
-
-                // ================== ANALYTICS TAB ==================
-                // Period spending summary card
-                Card(
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Wordmark + chart-type shortcut, scrolls away with the content like Home
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("insights_summary_card"),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                    )
+                        .testTag("insights_brand_header"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(
+                    ShylockWordmark()
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .size(40.dp)
+                            .liquidGlass(shape = CircleShape, strength = 0.9f)
+                            .clickable { selectedChartTab = (selectedChartTab + 1) % 3 }
+                            .testTag("insights_chart_cycle_btn"),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = when (selectedAnalysisPeriod) {
-                                AnalysisPeriod.WEEKLY -> "Weekly breakdown • ${selectedMonth.format(monthFormatter)}"
-                                AnalysisPeriod.MONTHLY -> "${selectedMonth.format(monthFormatter)} spending breakdown"
-                                AnalysisPeriod.YEARLY -> "Yearly breakdown (${selectedMonth.year})"
-                            }.uppercase(),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            letterSpacing = 1.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = formatInRupee(totalPeriodSpend, currency = currencySymbol),
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = when (selectedAnalysisPeriod) {
-                                AnalysisPeriod.WEEKLY -> "Last 7 days of ${selectedMonth.format(monthFormatter)}"
-                                AnalysisPeriod.MONTHLY -> "Total spend for ${selectedMonth.format(monthFormatter)}"
-                                AnalysisPeriod.YEARLY -> "12-month spend up to ${selectedMonth.format(monthFormatter)}"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
+                        Icon(
+                            imageVector = Icons.Default.BarChart,
+                            contentDescription = "Switch chart type",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
 
-                // Time Period Selector
+                // Page title with the compact month picker on the trailing edge
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Analysis Limit",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Insights",
+                            fontSize = 28.sp,
+                            lineHeight = 32.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = (-0.5).sp,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Understand your spending better",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    MonthPickerPill(
+                        selectedMonth = selectedMonth,
+                        onClick = { showMonthPickerSheet = true },
+                        modifier = Modifier.testTag("insights_month_navigation_bar")
                     )
-                    
-                    SingleChoiceSegmentedButtonRow {
-                        AnalysisPeriod.values().forEachIndexed { index, period ->
-                            SegmentedButton(
-                                selected = selectedAnalysisPeriod == period,
-                                onClick = { selectedAnalysisPeriod = period },
-                                shape = SegmentedButtonDefaults.itemShape(index = index, count = 3)
-                            ) {
-                                Text(
-                                    text = period.name.lowercase().replaceFirstChar { it.uppercase() },
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
+                }
+
+                // Past month indicator banner if viewing a past month
+                if (isPastCalendarMonth) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .liquidGlass(shape = RoundedCornerShape(14.dp), tint = MaterialTheme.colorScheme.secondary, strength = 0.8f)
+                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                            .testTag("insights_past_month_banner"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Viewing insights for ${selectedMonth.format(monthFormatter)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
 
-                // Dynamic Charts Card Container (switching base data recursively!)
-                Card(
+                // Hero spending summary for the selected period
+                InsightsSummaryCard(
+                    period = selectedAnalysisPeriod,
+                    selectedMonth = selectedMonth,
+                    isCurrentMonth = isCurrentCalendarMonth,
+                    totalSpend = totalPeriodSpend,
+                    lastPeriodSpend = lastPeriodSpend,
+                    currencySymbol = currencySymbol,
+                    sparkline = periodSparkline
+                )
+
+                // Time Period Selector
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Analysis Period",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    GlassSegmentedControl(
+                        options = AnalysisPeriod.values().map { it.name.lowercase().replaceFirstChar { c -> c.uppercase() } },
+                        selectedIndex = AnalysisPeriod.values().indexOf(selectedAnalysisPeriod),
+                        onSelect = { selectedAnalysisPeriod = AnalysisPeriod.values()[it] },
+                        expand = true,
+                        height = 36.dp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("analysis_period_selector")
+                    )
+                }
+
+                // Spending breakdown: chart switcher, chart, per-category list, tip
+                GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("analytics_container_card"),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = 8.dp,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Color Graphs",
+                                text = "Spending Breakdown",
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                lineHeight = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Your expenses by category",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Normal,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            
-                            // Switch between different visual charts
-                            SingleChoiceSegmentedButtonRow {
-                                listOf("Donut", "Bar", "Trend").forEachIndexed { index, label ->
-                                    SegmentedButton(
-                                        selected = selectedChartTab == index,
-                                        onClick = { selectedChartTab = index },
-                                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 3)
-                                    ) {
-                                        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                                    }
-                                }
-                            }
                         }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Rendering selected visual chart with matching Category colors
-                        AnimatedContent(
-                            targetState = selectedChartTab,
-                            transitionSpec = { fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(220)) },
-                            label = "analytics_chart_tabs"
-                        ) { chartTab ->
-                            when (chartTab) {
-                                0 -> DonutChartComponent(
-                                    categories = categories,
-                                    stats = periodStats,
-                                    totalSpend = totalPeriodSpend,
-                                    selectedCatId = selectedCatId,
-                                    currencySymbol = currencySymbol,
-                                    onSliceClick = { viewModel.toggleCategorySelection(it) }
-                                )
-                                1 -> BarChartComponent(
-                                    categories = categories,
-                                    stats = periodStats,
-                                    selectedCatId = selectedCatId,
-                                    onBarClick = { viewModel.toggleCategorySelection(it) }
-                                )
-                                else -> SpendingTrendChart(
-                                    categories = categories,
-                                    transactions = filteredTrendTransactions,
-                                    selectedMonth = selectedMonth
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Core Interactive Category Legend System
-                        CategoryLegendView(
-                            categories = categories,
-                            stats = periodStats,
-                            selectedCatId = selectedCatId,
-                            onLegendClick = { viewModel.toggleCategorySelection(it) },
-                            onClearClick = { viewModel.clearCategorySelection() }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        GlassSegmentedControl(
+                            options = listOf("Donut", "Bar", "Trend"),
+                            selectedIndex = selectedChartTab,
+                            onSelect = { selectedChartTab = it },
+                            height = 32.dp,
+                            fontSize = 11.sp,
+                            modifier = Modifier.testTag("chart_type_selector")
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Rendering selected visual chart with matching Category colors
+                    AnimatedContent(
+                        targetState = selectedChartTab,
+                        transitionSpec = { fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(220)) },
+                        label = "analytics_chart_tabs"
+                    ) { chartTab ->
+                        when (chartTab) {
+                            0 -> DonutChartComponent(
+                                categories = categories,
+                                stats = periodStats,
+                                totalSpend = totalPeriodSpend,
+                                selectedCatId = selectedCatId,
+                                currencySymbol = currencySymbol,
+                                caption = when (selectedAnalysisPeriod) {
+                                    AnalysisPeriod.WEEKLY -> "Last 7 days"
+                                    AnalysisPeriod.MONTHLY -> if (isCurrentCalendarMonth) "This Month" else selectedMonth.format(monthFormatter)
+                                    AnalysisPeriod.YEARLY -> "Last 12 months"
+                                },
+                                onSliceClick = { viewModel.toggleCategorySelection(it) }
+                            )
+                            1 -> BarChartComponent(
+                                categories = categories,
+                                stats = periodStats,
+                                selectedCatId = selectedCatId,
+                                onBarClick = { viewModel.toggleCategorySelection(it) }
+                            )
+                            else -> SpendingTrendChart(
+                                categories = categories,
+                                transactions = filteredTrendTransactions,
+                                selectedMonth = selectedMonth
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Per-category rows double as the chart legend and highlight toggle
+                    CategoryBreakdownList(
+                        categories = categories,
+                        stats = periodStats,
+                        selectedCatId = selectedCatId,
+                        currencySymbol = currencySymbol,
+                        onRowClick = { viewModel.toggleCategorySelection(it) }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    InsightTipCard(
+                        topCategory = topCategory?.first,
+                        topShare = topCategory?.second?.percentage ?: 0.0,
+                        period = selectedAnalysisPeriod,
+                        onClick = { navController.navigate("categories") }
+                    )
                 }
 
                 // Advanced Highlighted Category Info Floating Panel (Shows detailed calculations)
@@ -2607,7 +2643,63 @@ fun getContrastColor(hexColor: String): Color {
 fun getContrastColorFor(color: Color): Color =
     if (color.luminance() > 0.55f) Color(0xFF06222B) else Color.White
 
-// Visual Component: Month Navigation Controls
+/**
+ * Single-line text that steps its font size down until it fits its width, so hero amounts stay
+ * whole instead of being ellipsized on narrow phones. (Compose 1.7 has no built-in auto-size.)
+ */
+@Composable
+fun AutoShrinkText(
+    text: String,
+    maxFontSize: androidx.compose.ui.unit.TextUnit,
+    minFontSize: androidx.compose.ui.unit.TextUnit,
+    color: Color,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight = FontWeight.Black,
+    letterSpacing: androidx.compose.ui.unit.TextUnit = 0.sp,
+    style: androidx.compose.ui.text.TextStyle = LocalTextStyle.current
+) {
+    var fontSize by remember(text, maxFontSize) { mutableStateOf(maxFontSize) }
+    Text(
+        text = text,
+        modifier = modifier,
+        fontSize = fontSize,
+        lineHeight = (fontSize.value * 1.15f).sp,
+        fontWeight = fontWeight,
+        letterSpacing = letterSpacing,
+        color = color,
+        style = style,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        onTextLayout = { result ->
+            if (result.didOverflowWidth && fontSize.value - 2f >= minFontSize.value) {
+                fontSize = (fontSize.value - 2f).sp
+            }
+        }
+    )
+}
+
+// Two-tone "SHYLOCK" wordmark shared by the Home and Insights headers
+@Composable
+fun ShylockWordmark(modifier: Modifier = Modifier, fontSize: androidx.compose.ui.unit.TextUnit = 22.sp) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "SHY",
+            fontSize = fontSize,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 6.sp,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            text = "LOCK",
+            fontSize = fontSize,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 6.sp,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
 // Visual Component: Branded home header (wordmark, tagline, time-aware greeting, avatar)
 @Composable
 fun ShylockBrandHeader(modifier: Modifier = Modifier) {
@@ -2629,22 +2721,7 @@ fun ShylockBrandHeader(modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "SHY",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 6.sp,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "LOCK",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 6.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+            ShylockWordmark()
             Text(
                 text = "Take control of your money",
                 style = MaterialTheme.typography.bodySmall,
@@ -2774,12 +2851,8 @@ fun TypeFilterPill(
         modifier = if (selected) {
             base
                 .clip(shape)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(lerp(accent, Color.Black, 0.12f), lerp(accent, Color.Black, 0.48f))
-                    )
-                )
-                .border(0.8.dp, accent.copy(alpha = 0.55f), shape)
+                .background(selectedPillBrush(accent))
+                .border(0.8.dp, selectedPillRim(accent), shape)
                 .clickable { onClick() }
         } else {
             base
@@ -2816,6 +2889,312 @@ fun buildSpendSparkline(monthTransactions: List<Transaction>, month: YearMonth, 
         totals[index] += tx.amount
     }
     return totals.toList()
+}
+
+/**
+ * Buckets the already period-filtered expenses into equal time slices for the Insights header
+ * sparkline. Always returns [buckets] values (zeros when empty) so the chart keeps its silhouette.
+ */
+fun buildPeriodSparkline(
+    periodExpenses: List<Transaction>,
+    period: AnalysisPeriod,
+    month: YearMonth,
+    buckets: Int = 6
+): List<Double> {
+    val zone = ZoneId.systemDefault()
+    val isCurrentMonth = month == YearMonth.now()
+    val anchor = if (isCurrentMonth) LocalDate.now() else month.atEndOfMonth()
+    val (start, end) = when (period) {
+        AnalysisPeriod.WEEKLY -> anchor.minusDays(6) to anchor.plusDays(1)
+        AnalysisPeriod.MONTHLY -> month.atDay(1) to month.plusMonths(1).atDay(1)
+        AnalysisPeriod.YEARLY -> month.minusMonths(11).atDay(1) to month.plusMonths(1).atDay(1)
+    }
+    val startMillis = start.atStartOfDay(zone).toInstant().toEpochMilli()
+    val span = (end.atStartOfDay(zone).toInstant().toEpochMilli() - startMillis).coerceAtLeast(1L)
+
+    val totals = DoubleArray(buckets)
+    periodExpenses.forEach { tx ->
+        val index = (((tx.timestamp - startMillis) * buckets) / span).toInt().coerceIn(0, buckets - 1)
+        totals[index] += tx.amount
+    }
+    return totals.toList()
+}
+
+// Compact glass pill that opens the month picker sheet (no prev/next arrows)
+@Composable
+fun MonthPickerPill(
+    selectedMonth: YearMonth,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
+    Row(
+        modifier = modifier
+            .height(44.dp)
+            .liquidGlass(shape = RoundedCornerShape(14.dp), strength = 0.9f, elevation = 4.dp)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp)
+            .testTag("month_label_button"),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.CalendarMonth,
+            contentDescription = null,
+            modifier = Modifier.size(17.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = selectedMonth.format(monthFormatter),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Icon(
+            imageVector = Icons.Default.ExpandMore,
+            contentDescription = "Open month selector",
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * Glass pill segmented control: the selected segment is a glowing accent pill, the rest sit
+ * quietly on the glass track separated by hairlines. [expand] stretches segments to share the
+ * available width; otherwise each hugs its label.
+ */
+@Composable
+fun GlassSegmentedControl(
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    expand: Boolean = false,
+    height: Dp = 40.dp,
+    fontSize: TextUnit = 12.sp
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val trackShape = RoundedCornerShape(50)
+    Row(
+        modifier = modifier
+            .height(height)
+            .liquidGlass(shape = trackShape, strength = 0.7f)
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        options.forEachIndexed { index, label ->
+            val selected = index == selectedIndex
+            // Hairline between two unselected neighbours only; the accent pill provides its own edge
+            if (index > 0 && !selected && index - 1 != selectedIndex) {
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .fillMaxHeight(0.55f)
+                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                )
+            }
+            val segmentBase = Modifier
+                .then(if (expand) Modifier.weight(1f) else Modifier)
+                .fillMaxHeight()
+                .then(if (selected) Modifier.accentGlow(accent, trackShape, 8.dp) else Modifier)
+                .clip(trackShape)
+            Box(
+                modifier = if (selected) {
+                    segmentBase
+                        .background(selectedPillBrush(accent))
+                        .border(0.8.dp, selectedPillRim(accent), trackShape)
+                        .clickable { onSelect(index) }
+                } else {
+                    segmentBase.clickable { onSelect(index) }
+                }
+                    .padding(horizontal = if (expand) 4.dp else 11.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    fontSize = fontSize,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// Hero summary on the Insights tab: glowing period total, change vs the previous period,
+// pacing bars and a plain-language delta tile
+@Composable
+fun InsightsSummaryCard(
+    period: AnalysisPeriod,
+    selectedMonth: YearMonth,
+    isCurrentMonth: Boolean,
+    totalSpend: Double,
+    lastPeriodSpend: Double,
+    currencySymbol: String,
+    sparkline: List<Double>,
+    modifier: Modifier = Modifier
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
+
+    val headline = when (period) {
+        AnalysisPeriod.WEEKLY -> "WEEKLY SPENDING"
+        AnalysisPeriod.MONTHLY -> "MONTHLY SPENDING"
+        AnalysisPeriod.YEARLY -> "YEARLY SPENDING"
+    }
+    val subtitle = when (period) {
+        AnalysisPeriod.WEEKLY -> "Total spent in the last 7 days"
+        AnalysisPeriod.MONTHLY -> if (isCurrentMonth) "Total spent this month" else "Total spent in ${selectedMonth.format(monthFormatter)}"
+        AnalysisPeriod.YEARLY -> "Total spent over the last 12 months"
+    }
+    val previousNoun = when (period) {
+        AnalysisPeriod.WEEKLY -> "last week"
+        AnalysisPeriod.MONTHLY -> "last month"
+        AnalysisPeriod.YEARLY -> "last year"
+    }
+
+    val percentageChange = if (lastPeriodSpend > 0.0) ((totalSpend - lastPeriodSpend) / lastPeriodSpend) * 100 else null
+    val isSpendingUp = (percentageChange ?: 0.0) > 0.0
+    val difference = Math.abs(totalSpend - lastPeriodSpend)
+    val deltaMessage = when {
+        lastPeriodSpend > 0.0 && totalSpend > lastPeriodSpend ->
+            "You spent ${formatInRupee(difference, currencySymbol)} more than $previousNoun"
+        lastPeriodSpend > 0.0 && totalSpend < lastPeriodSpend ->
+            "You spent ${formatInRupee(difference, currencySymbol)} less than $previousNoun"
+        lastPeriodSpend > 0.0 -> "Same as $previousNoun — steady as she goes"
+        totalSpend > 0.0 -> "Nothing recorded $previousNoun to compare"
+        else -> "No spending recorded yet"
+    }
+
+    GlassCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("insights_summary_card"),
+        shape = RoundedCornerShape(24.dp),
+        elevation = 8.dp,
+        contentPadding = PaddingValues(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 14.dp)
+    ) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = headline,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                AutoShrinkText(
+                    text = formatInRupee(totalSpend, currency = currencySymbol),
+                    maxFontSize = 34.sp,
+                    minFontSize = 20.sp,
+                    letterSpacing = (-1).sp,
+                    color = accent,
+                    style = MaterialTheme.typography.headlineLarge,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+                if (percentageChange != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (isSpendingUp) ExpenseRedContainer else IncomeGreenContainer)
+                                .border(
+                                    0.8.dp,
+                                    (if (isSpendingUp) ExpenseRed else IncomeGreen).copy(alpha = 0.45f),
+                                    CircleShape
+                                )
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isSpendingUp) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                contentDescription = null,
+                                tint = if (isSpendingUp) ExpenseRed else IncomeGreen,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "${String.format(Locale.US, "%.0f", Math.abs(percentageChange))}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSpendingUp) ExpenseRed else IncomeGreen
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "vs $previousNoun",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = "Comparison",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "No prior period to compare",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(
+                modifier = Modifier.width(132.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                SpendRhythmBars(
+                    values = sparkline,
+                    modifier = Modifier
+                        .padding(end = 4.dp)
+                        .size(width = 78.dp, height = 52.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .liquidGlass(shape = RoundedCornerShape(12.dp), strength = 0.75f)
+                        .padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = deltaMessage,
+                        style = MaterialTheme.typography.labelSmall,
+                        lineHeight = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -3242,7 +3621,7 @@ private fun SpendRhythmBars(
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val peak = values.maxOrNull() ?: 0.0
-    val peakIndex = values.indexOfFirst { it == peak }
+    val peakIndex = if (peak > 0.0) values.indexOfFirst { it == peak } else -1
 
     Canvas(modifier = modifier) {
         if (values.isEmpty()) return@Canvas
@@ -3274,7 +3653,7 @@ private fun SpendRhythmBars(
     }
 }
 
-// Visual Component: Donut Chart with Custom Canvas Drawing
+/// Visual Component: Donut Chart with Custom Canvas Drawing
 @Composable
 fun DonutChartComponent(
     categories: List<Category>,
@@ -3282,6 +3661,7 @@ fun DonutChartComponent(
     totalSpend: Double,
     selectedCatId: Int?,
     currencySymbol: String = "₹",
+    caption: String = "This Month",
     onSliceClick: (Int) -> Unit
 ) {
     if (totalSpend == 0.0 || categories.isEmpty()) {
@@ -3292,31 +3672,45 @@ fun DonutChartComponent(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                imageVector = Icons.Default.PieChart,
-                contentDescription = "Empty chart",
-                tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                modifier = Modifier.size(60.dp)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .liquidGlass(shape = CircleShape, strength = 0.6f),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PieChart,
+                    contentDescription = "Empty chart",
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                    modifier = Modifier.size(34.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Tracking category spending creates beautiful visualizations here!",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.outline,
+                text = "No expenses in this period yet",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "Add a few transactions and your breakdown appears here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
         }
     } else {
+        val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(190.dp),
+                .height(196.dp),
             contentAlignment = Alignment.Center
         ) {
             Canvas(
                 modifier = Modifier
-                    .size(150.dp)
+                    .size(176.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -3325,23 +3719,35 @@ fun DonutChartComponent(
                     }
             ) {
                 var currentAngle = -90f
-                val strokeWidth = 32.dp.toPx()
+                val strokeWidth = 22.dp.toPx()
+                // Inset so a highlighted slice's thicker stroke stays inside the canvas
+                val inset = 5.dp.toPx()
+                val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
+                val arcOffset = Offset(inset, inset)
+
+                // Faint track ring gives the donut a base to sit on
+                drawCircle(
+                    color = trackColor,
+                    radius = (arcSize.width - strokeWidth) / 2f,
+                    style = Stroke(width = strokeWidth)
+                )
 
                 categories.forEach { cat ->
                     val catSpend = stats[cat.id]?.totalAmount ?: 0.0
                     if (catSpend > 0.0) {
                         val sweepAngle = ((catSpend / totalSpend) * 360f).toFloat()
                         val isHighlighted = selectedCatId == cat.id
-                        val activeStroke = if (isHighlighted) strokeWidth + 12f else strokeWidth
-                        val activeAlpha = if (selectedCatId == null || isHighlighted) 1.0f else 0.35f
+                        val activeStroke = if (isHighlighted) strokeWidth + inset * 1.5f else strokeWidth
+                        val activeAlpha = if (selectedCatId == null || isHighlighted) 1.0f else 0.3f
 
                         drawArc(
                             color = parseHexColor(cat.colorHex).copy(alpha = activeAlpha),
                             startAngle = currentAngle,
                             sweepAngle = sweepAngle,
                             useCenter = false,
-                            style = Stroke(width = activeStroke, cap = StrokeCap.Round),
-                            size = Size(size.width, size.height)
+                            topLeft = arcOffset,
+                            size = arcSize,
+                            style = Stroke(width = activeStroke, cap = StrokeCap.Butt)
                         )
                         currentAngle += sweepAngle
                     }
@@ -3349,7 +3755,10 @@ fun DonutChartComponent(
             }
 
             // Central info display inside donut hole
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.width(108.dp)
+            ) {
                 if (selectedCatId != null) {
                     val highlightedCat = categories.find { it.id == selectedCatId }
                     val highlightedStats = stats[selectedCatId]
@@ -3358,40 +3767,49 @@ fun DonutChartComponent(
                             imageVector = getIconVector(highlightedCat.iconName),
                             contentDescription = highlightedCat.name,
                             tint = parseHexColor(highlightedCat.colorHex),
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = highlightedCat.name,
+                            text = highlightedCat.displayName,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = parseHexColor(highlightedCat.colorHex)
+                            fontSize = 12.sp,
+                            color = parseHexColor(highlightedCat.colorHex),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = "$currencySymbol${NumberFormat.getIntegerInstance().format(highlightedStats.totalAmount)}",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 17.sp,
+                        AutoShrinkText(
+                            text = formatInRupee(highlightedStats.totalAmount, currency = currencySymbol),
+                            maxFontSize = 20.sp,
+                            minFontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = String.format("%.1f%%", highlightedStats.percentage),
+                            text = String.format("%.1f%% of spend", highlightedStats.percentage),
                             fontWeight = FontWeight.Medium,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.outline
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 } else {
                     Text(
                         text = "Total Spend",
                         fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.outline,
-                        fontWeight = FontWeight.Bold
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
+                    )
+                    AutoShrinkText(
+                        text = formatInRupee(totalSpend, currency = currencySymbol),
+                        maxFontSize = 24.sp,
+                        minFontSize = 13.sp,
+                        letterSpacing = (-0.5).sp,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "$currencySymbol${NumberFormat.getIntegerInstance().format(totalSpend)}",
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 18.sp,
-                        color = MaterialTheme.colorScheme.onSurface
+                        text = caption,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.outline,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
@@ -3415,7 +3833,7 @@ fun BarChartComponent(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(180.dp),
+                .height(160.dp),
             contentAlignment = Alignment.Center
         ) {
             Text("No spending data available to graph.", fontSize = 12.sp, color = Color.Gray)
@@ -3424,7 +3842,7 @@ fun BarChartComponent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(180.dp)
+                .height(160.dp)
                 .horizontalScroll(rememberScrollState())
                 .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -3530,7 +3948,7 @@ fun SpendingTrendChart(
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(130.dp)
+                .height(112.dp)
         ) {
             val width = size.width
             val height = size.height
@@ -3610,98 +4028,166 @@ fun SpendingTrendChart(
     }
 }
 
-// Visual Component: Legend System with highlighting
-@OptIn(ExperimentalLayoutApi::class)
+/// Visual Component: table-style category breakdown. Doubles as the chart legend and the
+// highlight toggle — tapping a row selects that category in the chart above.
 @Composable
-fun CategoryLegendView(
+fun CategoryBreakdownList(
     categories: List<Category>,
     stats: Map<Int, CategoryStats>,
     selectedCatId: Int?,
-    onLegendClick: (Int) -> Unit,
-    onClearClick: () -> Unit
+    currencySymbol: String,
+    onRowClick: (Int) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Color Codes Legend",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.outline
-            )
-            if (selectedCatId != null) {
-                TextButton(
-                    onClick = onClearClick,
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text("Clear Highlight", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+    val ordered = remember(categories, stats) {
+        categories.sortedWith(
+            compareByDescending<Category> { stats[it.id]?.totalAmount ?: 0.0 }.thenBy { it.displayName }
+        )
+    }
+    val panelShape = RoundedCornerShape(14.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(panelShape)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.38f))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), panelShape)
+            .testTag("category_breakdown_list")
+    ) {
+        ordered.forEachIndexed { index, cat ->
+            val catColor = parseHexColor(cat.colorHex)
+            val isSelected = selectedCatId == cat.id
+            val spend = stats[cat.id]?.totalAmount ?: 0.0
+            val share = stats[cat.id]?.percentage ?: 0.0
+            val dimmed = selectedCatId != null && !isSelected
+
+            if (index > 0) {
+                HorizontalDivider(
+                    thickness = 0.6.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                )
             }
-        }
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            categories.forEach { cat ->
-                val isSelected = selectedCatId == cat.id
-                val spend = stats[cat.id]?.totalAmount ?: 0.0
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(if (isSelected) catColor.copy(alpha = 0.12f) else Color.Transparent)
+                    .clickable { onRowClick(cat.id) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .alpha(if (dimmed) 0.55f else 1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Colour dot with a soft halo so it reads on the dark glass
+                Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (isSelected) parseHexColor(cat.colorHex).copy(alpha = 0.15f)
-                            else Color.Transparent
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = if (isSelected) parseHexColor(cat.colorHex) else Color.LightGray.copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .clickable { onLegendClick(cat.id) }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .size(15.dp)
+                        .clip(CircleShape)
+                        .background(catColor.copy(alpha = 0.22f)),
+                    contentAlignment = Alignment.Center
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(9.dp)
                             .clip(CircleShape)
-                            .background(parseHexColor(cat.colorHex)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = getIconVector(cat.iconName),
-                            contentDescription = null,
-                            tint = getContrastColor(cat.colorHex),
-                            modifier = Modifier.size(12.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = cat.displayName,
-                        fontSize = 11.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isSelected) parseHexColor(cat.colorHex) else MaterialTheme.colorScheme.onSurfaceVariant
+                            .background(catColor)
                     )
-                    if (spend > 0.0) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "(₹${NumberFormat.getIntegerInstance().format(spend)})",
-                            fontSize = 9.sp,
-                            color = MaterialTheme.colorScheme.outline,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
                 }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = cat.displayName,
+                    fontSize = 13.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) catColor else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = formatInRupee(spend, currency = currencySymbol),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.widthIn(min = 64.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "${String.format(Locale.US, "%.0f", share)}%",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(38.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = if (isSelected) catColor else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
+    }
+}
+
+// Visual Component: contextual tip strip under the breakdown, links to category budgets
+@Composable
+fun InsightTipCard(
+    topCategory: Category?,
+    topShare: Double,
+    period: AnalysisPeriod,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val periodNoun = when (period) {
+        AnalysisPeriod.WEEKLY -> "week"
+        AnalysisPeriod.MONTHLY -> "month"
+        AnalysisPeriod.YEARLY -> "year"
+    }
+    val message = if (topCategory != null && topShare > 0.0) {
+        "${topCategory.displayName} is ${String.format(Locale.US, "%.0f", topShare)}% of your spend this $periodNoun. Set a budget to keep it in check."
+    } else {
+        "Keep track of your top spending categories to stay within your budget."
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .liquidGlass(shape = RoundedCornerShape(14.dp), strength = 0.7f)
+            .clickable { onClick() }
+            .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp)
+            .testTag("insight_tip_card"),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Lightbulb,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)) {
+                    append("Tip: ")
+                }
+                append(message)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = "Manage category budgets",
+            tint = accent,
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
@@ -3713,14 +4199,13 @@ fun DetailedStatsPanel(
     currencySymbol: String = "₹",
     onClear: () -> Unit
 ) {
-    Card(
+    val panelShape = RoundedCornerShape(20.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .softShadow(RoundedCornerShape(16.dp), 4.dp, glassShadowColor())
-            .testTag("detailed_stats_panel"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = parseHexColor(category.colorHex).copy(alpha = 0.08f)),
-        border = BorderStroke(1.5.dp, parseHexColor(category.colorHex))
+            .liquidGlass(shape = panelShape, tint = parseHexColor(category.colorHex), elevation = 6.dp)
+            .border(1.2.dp, parseHexColor(category.colorHex).copy(alpha = 0.7f), panelShape)
+            .testTag("detailed_stats_panel")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -3804,9 +4289,9 @@ fun DetailedStatsPanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.LightGray.copy(alpha = 0.15f))
-                    .padding(8.dp),
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.4f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
