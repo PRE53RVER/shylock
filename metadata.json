@@ -1,0 +1,6 @@
+{
+  "name": "SHYLOCK",
+  "description": "An interactive budget category color management system that showcases smart palette assignment, custom color-coded analytics, and accessible dark/light palettes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

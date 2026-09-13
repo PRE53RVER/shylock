@@ -1,0 +1,25 @@
+# Gradle / build outputs
+.gradle/
+.kotlin/
+build/
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+*.hprof
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Local config & secrets (never commit)
+local.properties
+.env
+debug.keystore
+*.jks
+*.keystore
+
+# Claude Code local settings
+.claude/settings.local.json
