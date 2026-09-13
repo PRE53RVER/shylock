@@ -328,6 +328,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
         if (currentRoute != "home") {
             isPastMonthUnlocked = false
         }
+        // The category highlight belongs to Insights only; drop it when leaving that tab
+        if (currentRoute != "insights") {
+            viewModel.clearCategorySelection()
+        }
     }
 
     // Month-scoped transactions and aggregations
@@ -937,12 +941,9 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
 
                                 Spacer(modifier = Modifier.height(10.dp))
 
-                                // Transaction Filtering based on Highlighted Category, searchQuery, and selectedTypeFilter within the selected month
-                                val filteredTransactions = remember(monthTransactions, selectedCatId, searchQuery, selectedTypeFilter) {
+                                // Transaction Filtering based on searchQuery and selectedTypeFilter within the selected month
+                                val filteredTransactions = remember(monthTransactions, searchQuery, selectedTypeFilter) {
                                     var list = monthTransactions
-                                    if (selectedCatId != null) {
-                                        list = list.filter { it.categoryId == selectedCatId }
-                                    }
                                     if (selectedTypeFilter != "ALL") {
                                         list = list.filter { it.type == selectedTypeFilter }
                                     }
@@ -982,7 +983,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                         }
                                         Spacer(modifier = Modifier.height(10.dp))
                                         Text(
-                                            text = if (selectedCatId != null) "No transactions color-matched to this category." else "No records match search & filter.",
+                                            text = "No records match search & filter.",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.outline,
                                             textAlign = TextAlign.Center
@@ -1076,6 +1077,15 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     .filter { it.totalAmount > 0.0 }
                     .maxByOrNull { it.totalAmount }
                     ?.let { top -> categories.find { it.id == top.categoryId }?.let { cat -> cat to top } }
+            }
+
+            // A highlighted category that has no spend in the newly chosen period is no longer
+            // drawn in the charts or list, so drop the highlight rather than show an empty panel
+            LaunchedEffect(periodStats, selectedCatId) {
+                val catId = selectedCatId ?: return@LaunchedEffect
+                if ((periodStats[catId]?.totalAmount ?: 0.0) <= 0.0) {
+                    viewModel.clearCategorySelection()
+                }
             }
 
             Column(
@@ -4039,12 +4049,29 @@ fun CategoryBreakdownList(
     onRowClick: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Only categories with spend in the selected period, matching the donut and bar charts
     val ordered = remember(categories, stats) {
-        categories.sortedWith(
-            compareByDescending<Category> { stats[it.id]?.totalAmount ?: 0.0 }.thenBy { it.displayName }
-        )
+        categories
+            .filter { (stats[it.id]?.totalAmount ?: 0.0) > 0.0 }
+            .sortedWith(
+                compareByDescending<Category> { stats[it.id]?.totalAmount ?: 0.0 }.thenBy { it.displayName }
+            )
     }
     val panelShape = RoundedCornerShape(14.dp)
+
+    if (ordered.isEmpty()) {
+        Text(
+            text = "No spending recorded in this period.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.outline,
+            textAlign = TextAlign.Center,
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp)
+                .testTag("category_breakdown_list")
+        )
+        return
+    }
 
     Column(
         modifier = modifier
