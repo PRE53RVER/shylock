@@ -246,6 +246,25 @@ fun Modifier.liquidGlass(
         .border(borderWidth, rim, shape)
 }
 
+/**
+ * Fill for a selected pill / segment. A soft top-left-to-bottom-right tint that stays within the
+ * accent family so it reads as a lit piece of glass rather than a hard two-tone band.
+ */
+fun selectedPillBrush(accent: Color): Brush = Brush.linearGradient(
+    0f to lerp(accent, Color.White, 0.16f).copy(alpha = 0.95f),
+    0.55f to accent.copy(alpha = 0.90f),
+    1f to lerp(accent, Color.Black, 0.14f).copy(alpha = 0.92f)
+)
+
+/** Rim for a selected pill: bright where light lands, fading to a soft accent edge. */
+fun selectedPillRim(accent: Color): Brush = Brush.linearGradient(
+    listOf(
+        Color.White.copy(alpha = 0.55f),
+        lerp(accent, Color.White, 0.35f).copy(alpha = 0.45f),
+        accent.copy(alpha = 0.35f)
+    )
+)
+
 /** Coloured halo used for the FAB and the selected nav pill. Shadow tinting needs API 28+. */
 fun Modifier.accentGlow(
     color: Color,
