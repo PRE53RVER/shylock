@@ -1,6 +1,12 @@
 package com.example
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -60,17 +66,23 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.example.data.model.Category
+import com.example.data.model.DetectedPayment
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
 import com.example.data.model.displayName
 import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.LendingListScreen
 import com.example.ui.screens.LendingSummaryCard
+import com.example.ui.screens.MoneyInboxScreen
+import com.example.ui.screens.PendingBadge
+import com.example.inbox.MoneyInboxNotifications
+import com.example.inbox.MoneyInboxSettings
 import com.example.ui.screens.OnboardingWizard
 import com.example.ui.screens.ShylockCurrencies
 import com.example.ui.theme.MyApplicationTheme
@@ -118,6 +130,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        MoneyInboxNotifications.ensureChannels(this)
+        MoneyInboxNotifications.syncDailyReminder(this)
+        handleInboxIntent(intent)
         setContent {
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val dynamicColorEnabled by viewModel.dynamicColor.collectAsStateWithLifecycle()
@@ -135,7 +150,25 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleInboxIntent(intent)
+    }
+
+    // A tap on a "Payment detected" / daily reminder notification lands on the Money Inbox tab
+    private fun handleInboxIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(MoneyInboxNotifications.EXTRA_OPEN_INBOX, false) == true) {
+            intent.removeExtra(MoneyInboxNotifications.EXTRA_OPEN_INBOX)
+            viewModel.requestOpenInbox()
+        }
+    }
 }
+
+// Plain number for the amount input: "500" rather than "500.0", two decimals when needed
+fun formatAmountInput(amount: Double): String =
+    if (amount % 1.0 == 0.0) amount.toLong().toString() else String.format(Locale.US, "%.2f", amount)
 
 // Helper to format values with Rupee symbol and Indian locale grouping (e.g., ₹12,34,567)
 fun formatInRupee(amount: Double, currency: String = "₹"): String {
@@ -314,6 +347,43 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     val onboardingComplete by viewModel.onboardingComplete.collectAsStateWithLifecycle()
     val currentAppTheme by viewModel.appTheme.collectAsStateWithLifecycle()
 
+    // Money Inbox state
+    val detectedPayments by viewModel.detectedPayments.collectAsStateWithLifecycle()
+    val pendingInboxCount by viewModel.pendingInboxCount.collectAsStateWithLifecycle()
+    val paymentDetectionEnabled by viewModel.paymentDetectionEnabled.collectAsStateWithLifecycle()
+    val paymentAlertsEnabled by viewModel.paymentAlertsEnabled.collectAsStateWithLifecycle()
+    val dailyReviewReminderEnabled by viewModel.dailyReviewReminderEnabled.collectAsStateWithLifecycle()
+    val openInboxRequest by viewModel.openInboxRequest.collectAsStateWithLifecycle()
+    // Notification-listener access is granted in system settings, so re-check whenever we resume
+    var hasNotificationAccess by remember { mutableStateOf(MoneyInboxSettings.hasNotificationAccess(context)) }
+    LifecycleResumeEffect(Unit) {
+        hasNotificationAccess = MoneyInboxSettings.hasNotificationAccess(context)
+        onPauseOrDispose { }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { /* Alerts silently stay off at the OS level if declined; the toggle itself is kept */ }
+    val requestPostNotifications: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    val openNotificationAccessSettings: () -> Unit = {
+        try {
+            context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            Toast.makeText(context, "Open Settings > Notifications > Notification access to allow SHYLOCK", Toast.LENGTH_LONG).show()
+        }
+    }
+    // Turning detection on also walks the user to the system screen where access is granted
+    val enablePaymentDetection: () -> Unit = {
+        viewModel.setPaymentDetectionEnabled(true)
+        requestPostNotifications()
+        if (!MoneyInboxSettings.hasNotificationAccess(context)) openNotificationAccessSettings()
+    }
+
     // Month navigation & scoping states
     val selectedMonth by viewModel.selectedMonth.collectAsStateWithLifecycle()
     val currentCalendarMonth = remember { YearMonth.now() }
@@ -327,6 +397,18 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "home"
+
+    // Notification taps ask for the inbox; honour it once the nav graph is ready
+    LaunchedEffect(openInboxRequest, onboardingComplete) {
+        if (openInboxRequest && onboardingComplete) {
+            navController.navigate("inbox") {
+                popUpTo("home") { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            viewModel.consumeOpenInboxRequest()
+        }
+    }
 
     // Reset past month unlock state when navigating to another month or tab
     LaunchedEffect(selectedMonth) {
@@ -416,6 +498,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     var showAddTransactionDialog by remember { mutableStateOf(false) }
     var editCategoryTarget by remember { mutableStateOf<Category?>(null) }
     var transactionToEdit by remember { mutableStateOf<Transaction?>(null) }
+    var inboxDraftTarget by remember { mutableStateOf<DetectedPayment?>(null) }
     var categoryToDelete by remember { mutableStateOf<Category?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
     var resetConfirmationText by remember { mutableStateOf("") }
@@ -471,7 +554,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             // Home, Insights and Settings host their own headers inside the scroll body so they can
             // scroll away and hand the whole viewport back to content; the other tabs keep a
             // lightweight title.
-            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "insights" && currentRoute != "settings" && !isLendingScreen) {
+            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "inbox" && currentRoute != "insights" && currentRoute != "settings" && !isLendingScreen) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
@@ -562,6 +645,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     ) {
                         val navItems = listOf(
                             Triple("home", Icons.Default.Home, "Home"),
+                            Triple("inbox", Icons.Default.Email, "Money Inbox"),
                             Triple("insights", Icons.Default.BarChart, "Insights"),
                             Triple("settings", Icons.Default.Settings, "Settings")
                         )
@@ -578,7 +662,23 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                         }
                                     }
                                 },
-                                icon = { Icon(imageVector = icon, contentDescription = label) },
+                                icon = {
+                                    if (route == "inbox" && pendingInboxCount > 0) {
+                                        BadgedBox(
+                                            badge = {
+                                                PendingBadge(
+                                                    count = pendingInboxCount,
+                                                    compact = true,
+                                                    modifier = Modifier.testTag("nav_inbox_badge")
+                                                )
+                                            }
+                                        ) {
+                                            Icon(imageVector = icon, contentDescription = label)
+                                        }
+                                    } else {
+                                        Icon(imageVector = icon, contentDescription = label)
+                                    }
+                                },
                                 label = {
                                     Text(
                                         label,
@@ -1075,6 +1175,39 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             }
         }
 
+        // === Destination: Money Inbox (payments detected from notifications) ===
+        composable("inbox") {
+            MoneyInboxScreen(
+                payments = detectedPayments,
+                currencySymbol = currencySymbol,
+                detectionEnabled = paymentDetectionEnabled,
+                hasNotificationAccess = hasNotificationAccess,
+                onRecord = { payment -> inboxDraftTarget = payment },
+                onDismiss = { payment ->
+                    viewModel.dismissDetectedPayment(payment)
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Payment dismissed",
+                            actionLabel = "Undo",
+                            duration = SnackbarDuration.Short
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            viewModel.restoreDetectedPayment(payment)
+                        }
+                    }
+                },
+                onEnableDetection = enablePaymentDetection,
+                onGrantAccess = openNotificationAccessSettings,
+                onOpenSettings = {
+                    navController.navigate("settings") {
+                        popUpTo("home") { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+            )
+        }
+
         composable("insights") {
             val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
             val lastPeriodSpend = remember(periodStats) { periodStats.values.sumOf { it.previousMonthTotal } }
@@ -1553,6 +1686,71 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                         trailing = {
                             SettingsValue(typeLabel)
                             SettingsChevron()
+                        }
+                    )
+                }
+
+                // ---------- Money Inbox ----------
+                SettingsSectionHeader(
+                    title = "Money Inbox",
+                    subtitle = "Detect payments from bank and UPI notifications",
+                    icon = { Icon(imageVector = Icons.Default.Email, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)) }
+                )
+                SettingsGroupCard {
+                    SettingsRow(
+                        title = "Payment detection",
+                        subtitle = if (paymentDetectionEnabled && !hasNotificationAccess) {
+                            "On, but notification access is not granted — tap to allow"
+                        } else {
+                            "Draft detected payments into Money Inbox for review"
+                        },
+                        onClick = if (paymentDetectionEnabled && !hasNotificationAccess) openNotificationAccessSettings else null,
+                        leading = { SettingsTileIcon(Icons.Default.Radar, "Detection") },
+                        trailing = {
+                            Switch(
+                                checked = paymentDetectionEnabled,
+                                onCheckedChange = { enabled ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (enabled) enablePaymentDetection() else viewModel.setPaymentDetectionEnabled(false)
+                                },
+                                modifier = Modifier.testTag("payment_detection_switch")
+                            )
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "New payment alerts",
+                        subtitle = "Notify me when a payment is detected",
+                        leading = { SettingsTileIcon(Icons.Default.NotificationsActive, "Alerts") },
+                        trailing = {
+                            Switch(
+                                checked = paymentAlertsEnabled,
+                                enabled = paymentDetectionEnabled,
+                                onCheckedChange = { enabled ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setPaymentAlertsEnabled(enabled)
+                                    if (enabled) requestPostNotifications()
+                                },
+                                modifier = Modifier.testTag("payment_alerts_switch")
+                            )
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Daily review reminder",
+                        subtitle = "At 9 PM, remind me if today’s payments are still unrecorded",
+                        leading = { SettingsTileIcon(Icons.Default.Schedule, "Reminder") },
+                        trailing = {
+                            Switch(
+                                checked = dailyReviewReminderEnabled,
+                                enabled = paymentDetectionEnabled,
+                                onCheckedChange = { enabled ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setDailyReviewReminderEnabled(enabled)
+                                    if (enabled) requestPostNotifications()
+                                },
+                                modifier = Modifier.testTag("daily_reminder_switch")
+                            )
                         }
                     )
                 }
@@ -2309,6 +2507,27 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                 }
                 showAddTransactionDialog = false
                 transactionToEdit = null
+            }
+        )
+    }
+
+    // Record a Money Inbox draft: the same add-record dialog, prefilled from the notification
+    inboxDraftTarget?.let { payment ->
+        AddTransactionDialog(
+            categories = categories,
+            subcategories = subcategories,
+            prefill = remember(payment, categories) { viewModel.draftTransactionFor(payment) },
+            defaultType = payment.transactionType,
+            transactions = transactions,
+            onCreateCategoryFirstClick = {
+                inboxDraftTarget = null
+                navController.navigate("categories")
+            },
+            onDismiss = { inboxDraftTarget = null },
+            onSave = { catId, subId, amount, desc, timestamp, type ->
+                viewModel.recordDetectedPayment(payment.id, catId, subId, amount, desc, timestamp, type)
+                inboxDraftTarget = null
+                Toast.makeText(context, if (type == "INCOME") "Added to income!" else "Payment recorded!", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -5611,6 +5830,7 @@ fun AddTransactionDialog(
     categories: List<Category>,
     subcategories: List<Subcategory>,
     transaction: Transaction? = null,
+    prefill: Transaction? = null, // seeds a *new* record (e.g. a Money Inbox draft) without entering edit mode
     defaultType: String = "EXPENSE",
     transactions: List<Transaction> = emptyList(),
     defaultMonth: YearMonth? = null,
@@ -5619,20 +5839,22 @@ fun AddTransactionDialog(
     onSave: (catId: Int, subId: Int?, amount: Double, desc: String, timestamp: Long, type: String) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
-    var amountStr by remember { mutableStateOf(transaction?.amount?.toString() ?: "") }
-    var desc by remember { mutableStateOf(transaction?.description ?: "") }
-    val initialType = transaction?.type ?: defaultType
+    val seed = transaction ?: prefill
+    var amountStr by remember { mutableStateOf(seed?.amount?.let { formatAmountInput(it) } ?: "") }
+    var desc by remember { mutableStateOf(seed?.description ?: "") }
+    val initialType = seed?.type ?: defaultType
     var selectedType by remember { mutableStateOf(initialType) }
     val filteredCategories = remember(categories, selectedType) {
         categories.filter { it.type.equals(selectedType, ignoreCase = true) }
     }
     var selectedCatId by remember {
         val initialCats = categories.filter { it.type.equals(initialType, ignoreCase = true) }
-        mutableStateOf<Int?>(transaction?.categoryId ?: initialCats.firstOrNull()?.id)
+        val seededCat = seed?.categoryId?.takeIf { id -> initialCats.any { it.id == id } }
+        mutableStateOf<Int?>(seededCat ?: initialCats.firstOrNull()?.id)
     }
-    var selectedSubId by remember { mutableStateOf<Int?>(transaction?.subcategoryId) }
+    var selectedSubId by remember { mutableStateOf<Int?>(seed?.subcategoryId) }
     var timestamp by remember {
-        val initialTimestamp = transaction?.timestamp ?: run {
+        val initialTimestamp = seed?.timestamp ?: run {
             if (defaultMonth != null && defaultMonth != YearMonth.now()) {
                 val day = java.time.LocalDate.now().dayOfMonth.coerceIn(1, defaultMonth.lengthOfMonth())
                 defaultMonth.atDay(day).atTime(12, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()

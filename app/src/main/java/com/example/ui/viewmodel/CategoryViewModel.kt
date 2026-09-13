@@ -8,12 +8,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
 import com.example.data.model.Category
+import com.example.data.model.DetectedPayment
 import com.example.data.model.LendingContact
 import com.example.data.model.LendingEntry
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
 import com.example.data.repository.CategoryRepository
 import com.example.data.repository.LendingRepository
+import com.example.data.repository.MoneyInboxRepository
+import com.example.inbox.MoneyInboxNotifications
+import com.example.inbox.MoneyInboxSettings
 import com.example.ui.theme.AppTheme
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +58,7 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
         database.transactionDao()
     )
     private val lendingRepository = LendingRepository(database.lendingDao())
+    private val inboxRepository = MoneyInboxRepository(database.detectedPaymentDao())
 
     // Raw database state flows
     val categories: StateFlow<List<Category>> = repository.allCategories
@@ -70,6 +75,13 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
 
     val lendingEntries: StateFlow<List<LendingEntry>> = lendingRepository.allEntries
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Money Inbox: drafts detected from notifications, waiting for the user's decision
+    val detectedPayments: StateFlow<List<DetectedPayment>> = inboxRepository.pendingPayments
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val pendingInboxCount: StateFlow<Int> = inboxRepository.pendingCount
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // Selected calendar month for scoped viewing (null means dynamically follows YearMonth.now() live)
     private val _selectedMonth = MutableStateFlow<YearMonth?>(null)
@@ -141,6 +153,26 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
         prefs.getBoolean("onboarding_complete", false)
     )
     val onboardingComplete = _onboardingComplete.asStateFlow()
+
+    // Money Inbox preferences (also read directly by the listener service / reminder receiver)
+    private val _paymentDetectionEnabled = MutableStateFlow(
+        prefs.getBoolean(MoneyInboxSettings.KEY_DETECTION_ENABLED, false)
+    )
+    val paymentDetectionEnabled = _paymentDetectionEnabled.asStateFlow()
+
+    private val _paymentAlertsEnabled = MutableStateFlow(
+        prefs.getBoolean(MoneyInboxSettings.KEY_ALERTS_ENABLED, true)
+    )
+    val paymentAlertsEnabled = _paymentAlertsEnabled.asStateFlow()
+
+    private val _dailyReviewReminderEnabled = MutableStateFlow(
+        prefs.getBoolean(MoneyInboxSettings.KEY_DAILY_REMINDER_ENABLED, false)
+    )
+    val dailyReviewReminderEnabled = _dailyReviewReminderEnabled.asStateFlow()
+
+    // Set when a notification tap asks the app to open on the Money Inbox tab
+    private val _openInboxRequest = MutableStateFlow(false)
+    val openInboxRequest = _openInboxRequest.asStateFlow()
 
     // Predefined color catalogs under themed palettes
     val palettes = mapOf(
@@ -308,6 +340,73 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
     fun setOnboardingComplete(complete: Boolean) {
         _onboardingComplete.value = complete
         prefs.edit().putBoolean("onboarding_complete", complete).apply()
+    }
+
+    // ---- Money Inbox ----
+
+    fun setPaymentDetectionEnabled(enabled: Boolean) {
+        _paymentDetectionEnabled.value = enabled
+        prefs.edit().putBoolean(MoneyInboxSettings.KEY_DETECTION_ENABLED, enabled).apply()
+    }
+
+    fun setPaymentAlertsEnabled(enabled: Boolean) {
+        _paymentAlertsEnabled.value = enabled
+        prefs.edit().putBoolean(MoneyInboxSettings.KEY_ALERTS_ENABLED, enabled).apply()
+    }
+
+    fun setDailyReviewReminderEnabled(enabled: Boolean) {
+        _dailyReviewReminderEnabled.value = enabled
+        prefs.edit().putBoolean(MoneyInboxSettings.KEY_DAILY_REMINDER_ENABLED, enabled).apply()
+        MoneyInboxNotifications.syncDailyReminder(getApplication())
+    }
+
+    fun requestOpenInbox() {
+        _openInboxRequest.value = true
+    }
+
+    fun consumeOpenInboxRequest() {
+        _openInboxRequest.value = false
+    }
+
+    /** Builds the prefilled draft the add-record dialog opens with for a detected payment. */
+    fun draftTransactionFor(payment: DetectedPayment): Transaction {
+        val type = payment.transactionType
+        val description = payment.counterparty ?: payment.source
+        val category = categories.value.firstOrNull { it.type.equals(type, ignoreCase = true) }
+        return Transaction(
+            id = 0,
+            categoryId = category?.id ?: 0,
+            subcategoryId = null,
+            amount = payment.amount,
+            description = description,
+            timestamp = payment.timestamp,
+            type = type
+        )
+    }
+
+    /** Records a draft through the normal add-transaction path and clears it from the inbox. */
+    fun recordDetectedPayment(paymentId: Int, categoryId: Int, subcategoryId: Int?, amount: Double, description: String, timestamp: Long, type: String) {
+        viewModelScope.launch {
+            repository.insertTransaction(
+                Transaction(
+                    categoryId = categoryId,
+                    subcategoryId = subcategoryId,
+                    amount = amount,
+                    description = description,
+                    timestamp = timestamp,
+                    type = type
+                )
+            )
+            inboxRepository.markRecorded(paymentId)
+        }
+    }
+
+    fun dismissDetectedPayment(payment: DetectedPayment) {
+        viewModelScope.launch { inboxRepository.markDismissed(payment.id) }
+    }
+
+    fun restoreDetectedPayment(payment: DetectedPayment) {
+        viewModelScope.launch { inboxRepository.restorePending(payment.id) }
     }
 
     // Export Data to JSON string
@@ -769,6 +868,7 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
             for (lc in lContacts) {
                 lendingRepository.deleteContact(lc)
             }
+            inboxRepository.clearAll()
             repository.ensureSystemCategories()
             clearCategorySelection()
         }
