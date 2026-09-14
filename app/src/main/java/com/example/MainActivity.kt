@@ -79,6 +79,7 @@ import com.example.data.model.displayName
 import com.example.ui.screens.CategoryEditorDialog
 import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.LendingListScreen
+import com.example.ui.screens.ManageCategoriesScreen
 import com.example.ui.screens.LendingSummaryCard
 import com.example.ui.screens.MoneyInboxScreen
 import com.example.ui.screens.PendingBadge
@@ -454,6 +455,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     // Modal state controllers
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var addCategoryDefaultType by remember { mutableStateOf("EXPENSE") }
+    // Manage Categories: which tab is open (also colours its FAB) and the user's drag order.
+    // Both live here so they survive leaving and re-entering the screen within a session.
+    var categoriesTypeTab by remember { mutableStateOf("EXPENSE") }
+    val categoryCustomOrder = remember { mutableStateListOf<Int>() }
     var showAddTransactionDialog by remember { mutableStateOf(false) }
     var editCategoryTarget by remember { mutableStateOf<Category?>(null) }
     var transactionToEdit by remember { mutableStateOf<Transaction?>(null) }
@@ -513,7 +518,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             // Home, Insights and Settings host their own headers inside the scroll body so they can
             // scroll away and hand the whole viewport back to content; the other tabs keep a
             // lightweight title.
-            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "inbox" && currentRoute != "insights" && currentRoute != "settings" && !isLendingScreen) {
+            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "inbox" && currentRoute != "insights" && currentRoute != "settings" && currentRoute != "categories" && !isLendingScreen) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
@@ -568,21 +573,35 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                         }
                     }
                 } else if (currentRoute == "categories") {
+                    // Matches the open tab: income is green, expense takes the app accent
+                    val fabColor = if (categoriesTypeTab == "INCOME") IncomeGreen else MaterialTheme.colorScheme.primary
                     FloatingActionButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        showAddCategoryDialog = true
-                    },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.testTag("add_category_btn"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Category")
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            addCategoryDefaultType = categoriesTypeTab
+                            showAddCategoryDialog = true
+                        },
+                        containerColor = fabColor,
+                        contentColor = Color.White,
+                        shape = CircleShape,
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 0.dp,
+                            pressedElevation = 0.dp
+                        ),
+                        modifier = Modifier
+                            .accentGlow(color = fabColor, shape = CircleShape, elevation = 12.dp)
+                            .size(58.dp)
+                            .testTag("add_category_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Category",
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
-        }
-    },
+        },
         bottomBar = {
             if (!isOnboardingScreen && !isLendingScreen) {
                 val navShape = RoundedCornerShape(26.dp)
@@ -2057,299 +2076,22 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
 
             // === Destination 4: Manage Categories Screen ===
             composable("categories") {
-                var selectedTypeTab by remember { mutableStateOf("EXPENSE") }
-                val expenseCount = categories.count { it.type == "EXPENSE" }
-                val incomeCount = categories.count { it.type == "INCOME" }
-                val isExpenseTab = selectedTypeTab == "EXPENSE"
-                val currentTypeBudget = categories.filter { it.type == selectedTypeTab }.sumOf { it.budgetLimit }
-                val currentTypeCount = if (isExpenseTab) expenseCount else incomeCount
-                
-                val categoryOrder = remember(categories) {
-                    mutableStateListOf<Int>().apply {
-                        addAll(categories.map { it.id })
-                    }
-                }
-                
-                val sortedCategories = remember(categories, categoryOrder) {
-                    val ordered = categoryOrder.mapNotNull { id -> categories.find { it.id == id } }
-                    val remaining = categories.filter { it.id !in categoryOrder }
-                    ordered + remaining
-                }
-
-                val typedCategories = remember(sortedCategories, selectedTypeTab) {
-                    sortedCategories.filter { it.type.equals(selectedTypeTab, ignoreCase = true) }
-                }
-
-                var searchQuery by remember { mutableStateOf("") }
-                val filteredCategories = remember(typedCategories, searchQuery) {
-                    if (searchQuery.isBlank()) {
-                        typedCategories
-                    } else {
-                        typedCategories.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                    }
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Header / Back navigation row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { navController.popBackStack() },
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Go back")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Manage Categories",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Expense vs Income Type Toggle Tabs
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val tabs = listOf(
-                            "EXPENSE" to "Expense Categories ($expenseCount)",
-                            "INCOME" to "Income Categories ($incomeCount)"
-                        )
-                        tabs.forEach { (typeVal, label) ->
-                            val isSelected = selectedTypeTab == typeVal
-                            val activeColor = if (typeVal == "INCOME") Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (isSelected) activeColor.copy(alpha = 0.15f) else Color.Transparent)
-                                    .border(
-                                        width = if (isSelected) 1.5.dp else 0.dp,
-                                        color = if (isSelected) activeColor else Color.Transparent,
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .clickable { selectedTypeTab = typeVal }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) activeColor else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    // Step 5.1: Beautiful summary header card
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("categories_summary_card"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isExpenseTab) {
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                            } else {
-                                Color(0xFF2E7D32).copy(alpha = 0.12f)
-                            }
-                        ),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isExpenseTab) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color(0xFF2E7D32).copy(alpha = 0.3f)
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = if (isExpenseTab) "Monthly Expense Budget" else "Monthly Income Target",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isExpenseTab) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f) else Color(0xFF2E7D32)
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = formatInRupee(currentTypeBudget, currencySymbol),
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Black,
-                                    color = if (isExpenseTab) MaterialTheme.colorScheme.onPrimaryContainer else Color(0xFF1B5E20)
-                                )
-                            }
-                            
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isExpenseTab) MaterialTheme.colorScheme.primary else Color(0xFF2E7D32)
-                                ),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = currentTypeCount.toString(),
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = if (isExpenseTab) "Expenses" else "Incomes",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White.copy(alpha = 0.85f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = "Customize colors, change budgets, or modify subcategories. Values are color-mapped instantly across transaction lists and charts.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Button(
-                        onClick = {
-                            addCategoryDefaultType = selectedTypeTab
-                            showAddCategoryDialog = true
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("categories_screen_add_btn"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isExpenseTab) MaterialTheme.colorScheme.primary else Color(0xFF2E7D32)
-                        )
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add New Category")
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isExpenseTab) "Add Expense Category" else "Add Income Category",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Step 5.3: Dynamic search field displayed if more than 8 categories
-                    if (categories.size > 8) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("categories_search_input"),
-                            placeholder = { Text("Search categories...") },
-                            leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search icon") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(imageVector = Icons.Default.Close, contentDescription = "Clear search")
-                                    }
-                                }
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                            )
-                        )
-                    }
-
-                    // Grid / List header section
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (searchQuery.isNotEmpty()) "Search Results (${filteredCategories.size})" else "Active Categories (${filteredCategories.size})",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        if (filteredCategories.size > 1 && searchQuery.isEmpty()) {
-                            Text(
-                                text = "Use arrows to reorder",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                        }
-                    }
-
-                    if (filteredCategories.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (searchQuery.isNotEmpty()) "No matching categories found." else "No categories. Click above to add some!",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                        }
-                    } else {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            filteredCategories.forEachIndexed { index, category ->
-                                val statsInfo = stats[category.id]
-                                val relatedSubs = subcategories.filter { it.parentCategoryId == category.id }
-                                
-                                UpgradedManageCategoryCard(
-                                    category = category,
-                                    stats = statsInfo,
-                                    subcategories = relatedSubs,
-                                    currencySymbol = currencySymbol,
-                                    canMoveUp = index > 0 && searchQuery.isEmpty(),
-                                    canMoveDown = index < filteredCategories.size - 1 && searchQuery.isEmpty(),
-                                    onMoveUp = {
-                                        val actualIndex = categoryOrder.indexOf(category.id)
-                                        if (actualIndex > 0) {
-                                            val prevId = categoryOrder[actualIndex - 1]
-                                            categoryOrder[actualIndex - 1] = category.id
-                                            categoryOrder[actualIndex] = prevId
-                                        }
-                                    },
-                                    onMoveDown = {
-                                        val actualIndex = categoryOrder.indexOf(category.id)
-                                        if (actualIndex >= 0 && actualIndex < categoryOrder.size - 1) {
-                                            val nextId = categoryOrder[actualIndex + 1]
-                                            categoryOrder[actualIndex + 1] = category.id
-                                            categoryOrder[actualIndex] = nextId
-                                        }
-                                    },
-                                    onEdit = { editCategoryTarget = category },
-                                    onDelete = { categoryToDelete = category }
-                                )
-                            }
-                        }
-                    }
-                }
+                ManageCategoriesScreen(
+                    categories = categories,
+                    subcategories = subcategories,
+                    stats = stats,
+                    currencySymbol = currencySymbol,
+                    selectedType = categoriesTypeTab,
+                    onSelectType = { categoriesTypeTab = it },
+                    customOrder = categoryCustomOrder,
+                    onBack = { navController.popBackStack() },
+                    onAddCategory = {
+                        addCategoryDefaultType = categoriesTypeTab
+                        showAddCategoryDialog = true
+                    },
+                    onEditCategory = { editCategoryTarget = it },
+                    onDeleteCategory = { categoryToDelete = it }
+                )
             }
 
             composable("onboarding") {
@@ -4842,232 +4584,6 @@ fun DetailedStatsPanel(
                     fontWeight = FontWeight.Black,
                     color = if (stats.trendPercentage >= 0.0) Color(0xFF6BCB77) else Color(0xFFFF6B6B)
                 )
-            }
-        }
-    }
-}
-
-// Visual Component: Upgraded Manage Category Card
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun UpgradedManageCategoryCard(
-    category: Category,
-    stats: CategoryStats?,
-    subcategories: List<Subcategory>,
-    currencySymbol: String,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val budget = category.budgetLimit
-    val spent = stats?.totalAmount ?: 0.0
-    val ratio = if (budget > 0.0) (spent / budget).toFloat() else 0f
-    val isOverBudget = spent > budget && budget > 0.0
-    val catColor = parseHexColor(category.colorHex)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("category_card_${category.id}"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, catColor.copy(alpha = 0.25f))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Row 1: Header (Icon, Name, Reorder/Edit/Delete actions)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(catColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = getIconVector(category.iconName),
-                            contentDescription = null,
-                            tint = getContrastColor(category.colorHex),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = category.displayName,
-                            fontWeight = FontWeight.ExtraBold,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "${subcategories.size} Subcategories",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-
-                // Small quick reorder and edits panel
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // Reorder controls
-                    IconButton(
-                        onClick = onMoveUp,
-                        enabled = canMoveUp,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowUp,
-                            contentDescription = "Move Up",
-                            tint = if (canMoveUp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = onMoveDown,
-                        enabled = canMoveDown,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Move Down",
-                            tint = if (canMoveDown) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    // Divider
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .height(24.dp)
-                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    )
-
-                    // Edit / Delete controls
-                    IconButton(
-                        onClick = onEdit,
-                        modifier = Modifier.size(48.dp).testTag("edit_category_btn_${category.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit Category",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    val isSystemCategory = category.name == "Lending" || category.name == "Loan Repayment"
-                    if (!isSystemCategory) {
-                        IconButton(
-                            onClick = onDelete,
-                            modifier = Modifier.size(48.dp).testTag("delete_category_btn_${category.id}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete Category",
-                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Row 2: Subcategories chips
-            if (subcategories.isNotEmpty()) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    subcategories.forEach { sub ->
-                        val subColor = parseHexColor(sub.colorHexOverride ?: category.colorHex)
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(subColor.copy(alpha = 0.1f))
-                                .border(1.dp, subColor.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = subcategoryIconVector(sub, category),
-                                    contentDescription = null,
-                                    tint = subColor,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = sub.name,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Divider
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-            // Row 3: Budget progress & stats meters
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (budget > 0.0) "Monthly Limit: ${formatInRupee(budget, currencySymbol)}" else "No Limit Set",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Spent: ${formatInRupee(spent, currencySymbol)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Black,
-                        color = if (isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                LinearProgressIndicator(
-                    progress = { ratio.coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = if (isOverBudget) MaterialTheme.colorScheme.error else catColor,
-                    trackColor = catColor.copy(alpha = 0.15f)
-                )
-
-                if (budget > 0.0) {
-                    val percentLeft = ((1.0 - ratio) * 100).coerceAtLeast(0.0)
-                    Text(
-                        text = if (isOverBudget) "Over budget limits!" else String.format("%.1f%% of budget pool remaining", percentLeft),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
-                    )
-                }
             }
         }
     }
