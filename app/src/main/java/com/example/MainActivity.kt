@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -70,6 +71,8 @@ import com.example.data.model.displayName
 import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.LendingListScreen
 import com.example.ui.screens.LendingSummaryCard
+import com.example.ui.screens.OnboardingWizard
+import com.example.ui.screens.ShylockCurrencies
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.AppTheme
@@ -103,6 +106,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -160,6 +164,10 @@ fun getIconVector(name: String): ImageVector {
         "home", "house" -> Icons.Default.Home
         "build", "tools" -> Icons.Default.Build
         "pets" -> Icons.Default.Pets
+        "wallet", "salary", "account_balance_wallet" -> Icons.Default.AccountBalanceWallet
+        "work", "business" -> Icons.Default.Work
+        "gift", "card_giftcard" -> Icons.Default.CardGiftcard
+        "trending_up", "interest" -> Icons.AutoMirrored.Filled.TrendingUp
         else -> Icons.Default.Category
     }
 }
@@ -453,16 +461,17 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     }
 
     val isLendingScreen = currentRoute == "lending" || (currentRoute?.startsWith("lending_contact") == true)
+    val isOnboardingScreen = currentRoute == "onboarding" || currentRoute == "onboarding_tour"
 
     Scaffold(
         containerColor = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onBackground,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            // Home and Insights host their own branded headers inside the scroll body so they can
+            // Home, Insights and Settings host their own headers inside the scroll body so they can
             // scroll away and hand the whole viewport back to content; the other tabs keep a
             // lightweight title.
-            if (currentRoute != "onboarding" && currentRoute != "home" && currentRoute != "insights" && !isLendingScreen) {
+            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "insights" && currentRoute != "settings" && !isLendingScreen) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
@@ -485,7 +494,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             }
         },
         floatingActionButton = {
-            if (currentRoute != "onboarding") {
+            if (!isOnboardingScreen) {
                 if (currentRoute == "home") {
                     if (canEdit) {
                         FloatingActionButton(
@@ -533,7 +542,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
         }
     },
         bottomBar = {
-            if (currentRoute != "onboarding" && !isLendingScreen) {
+            if (!isOnboardingScreen && !isLendingScreen) {
                 val navShape = RoundedCornerShape(26.dp)
                 Box(
                     modifier = Modifier
@@ -1333,621 +1342,511 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
         }
 
         // === Destination 3: Settings ===
-            composable("settings") {
-                var pendingPaletteTheme by remember { mutableStateOf<PaletteTheme?>(null) }
-                var showConfirmationDialog by remember { mutableStateOf(false) }
+        composable("settings") {
+            var pendingPaletteTheme by remember { mutableStateOf<PaletteTheme?>(null) }
+            var showConfirmationDialog by remember { mutableStateOf(false) }
+            // Pickers live in bottom sheets so the main list stays a compact set of rows
+            var showAppThemeSheet by remember { mutableStateOf(false) }
+            var showPaletteSheet by remember { mutableStateOf(false) }
+            var showCurrencySheet by remember { mutableStateOf(false) }
+            var showTypeSheet by remember { mutableStateOf(false) }
+            var showAboutSheet by remember { mutableStateOf(false) }
 
-                if (showConfirmationDialog && pendingPaletteTheme != null) {
-                    AlertDialog(
-                        onDismissRequest = { showConfirmationDialog = false },
-                        title = { Text("Update Category Colors", fontWeight = FontWeight.Bold) },
-                        text = { Text("Apply this palette's colors to your existing categories?") },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    pendingPaletteTheme?.let { palette ->
-                                        viewModel.setPaletteTheme(palette)
-                                        viewModel.applyPaletteToExistingCategories(palette)
-                                        Toast.makeText(context, "${palette.name} theme applied and categories updated", Toast.LENGTH_SHORT).show()
-                                    }
-                                    showConfirmationDialog = false
+            val currencyOptions = remember { ShylockCurrencies.map { it.symbol to it.name } }
+            val currencyLabel = currencyOptions.firstOrNull { it.first == currencySymbol }
+                ?.let { "${it.second} (${it.first})" } ?: currencySymbol
+            val paletteLabel = currentTheme.name.lowercase().replaceFirstChar { it.uppercase() }
+            val typeLabel = if (defaultType == "INCOME") "Income" else "Expense"
+            val themeModeIndex = when (themeMode) {
+                "LIGHT" -> 1
+                "DARK" -> 2
+                else -> 0
+            }
+            val isDarkTheme = when (themeMode) {
+                "LIGHT" -> false
+                "DARK" -> true
+                else -> isSystemInDarkTheme()
+            }
+
+            if (showConfirmationDialog && pendingPaletteTheme != null) {
+                AlertDialog(
+                    onDismissRequest = { showConfirmationDialog = false },
+                    title = { Text("Update Category Colors", fontWeight = FontWeight.Bold) },
+                    text = { Text("Apply this palette's colors to your existing categories?") },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                pendingPaletteTheme?.let { palette ->
+                                    viewModel.setPaletteTheme(palette)
+                                    viewModel.applyPaletteToExistingCategories(palette)
+                                    Toast.makeText(context, "${palette.name} theme applied and categories updated", Toast.LENGTH_SHORT).show()
                                 }
-                            ) {
-                                Text("Yes")
+                                showConfirmationDialog = false
                             }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    pendingPaletteTheme?.let { palette ->
-                                        viewModel.setPaletteTheme(palette)
-                                        Toast.makeText(context, "${palette.name} theme applied (existing categories preserved)", Toast.LENGTH_SHORT).show()
-                                    }
-                                    showConfirmationDialog = false
+                        ) {
+                            Text("Yes")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                pendingPaletteTheme?.let { palette ->
+                                    viewModel.setPaletteTheme(palette)
+                                    Toast.makeText(context, "${palette.name} theme applied (existing categories preserved)", Toast.LENGTH_SHORT).show()
                                 }
-                            ) {
-                                Text("No")
+                                showConfirmationDialog = false
                             }
+                        ) {
+                            Text("No")
+                        }
+                    }
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Page header — scrolls away with the content like Home and Insights
+                SettingsHeader(modifier = Modifier.testTag("settings_header"))
+
+                // Help & Onboarding — standalone highlighted card
+                SettingsGroupCard(elevation = 6.dp) {
+                    SettingsRow(
+                        title = "Help & Onboarding",
+                        subtitle = "Re-run the setup guide anytime to explore features",
+                        onClick = { navController.navigate("onboarding_tour") },
+                        modifier = Modifier.testTag("onboarding_tour_row"),
+                        leading = { SettingsTileIcon(Icons.Default.AutoAwesome, "Help & Tour") },
+                        trailing = { SettingsChevron() }
+                    )
+                }
+
+                // ---------- Appearance ----------
+                SettingsSectionHeader(
+                    title = "Appearance",
+                    subtitle = "Customize how Shylock looks and feels",
+                    icon = { Icon(imageVector = Icons.Default.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)) }
+                )
+                SettingsGroupCard {
+                    val themeModeControl: @Composable (Boolean) -> Unit = { expand ->
+                        GlassSegmentedControl(
+                            options = listOf("System", "Light", "Dark"),
+                            selectedIndex = themeModeIndex,
+                            onSelect = { index ->
+                                val (modeVal, label) = listOf("SYSTEM" to "System", "LIGHT" to "Light", "DARK" to "Dark")[index]
+                                if (modeVal != themeMode) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setThemeMode(modeVal)
+                                    Toast.makeText(context, "Theme mode set to $label", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            expand = expand,
+                            height = 36.dp,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .then(if (expand) Modifier.fillMaxWidth() else Modifier)
+                                .testTag("theme_mode_segmented")
+                        )
+                    }
+                    // The three-way control sits beside the title where the card is wide enough;
+                    // on narrow phones it drops below the text so the title is never crushed
+                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                        if (maxWidth >= 350.dp) {
+                            SettingsRow(
+                                title = "App theme mode",
+                                subtitle = "Follow system or choose manually",
+                                leading = { SettingsTileIcon(Icons.Default.LightMode, "Theme mode") },
+                                trailing = { themeModeControl(false) }
+                            )
+                        } else {
+                            Column {
+                                SettingsRow(
+                                    title = "App theme mode",
+                                    subtitle = "Follow system or choose manually",
+                                    leading = { SettingsTileIcon(Icons.Default.LightMode, "Theme mode") }
+                                )
+                                Box(modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 12.dp)) {
+                                    themeModeControl(true)
+                                }
+                            }
+                        }
+                    }
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "App Theme",
+                        subtitle = "Changes the overall app colors",
+                        onClick = { showAppThemeSheet = true },
+                        modifier = Modifier.testTag("app_theme_row"),
+                        leading = { SettingsTileIcon(Icons.Default.Palette, "App Theme") },
+                        trailing = {
+                            SettingsValue(currentAppTheme.displayName())
+                            SettingsChevron()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Global Color Palette",
+                        subtitle = "Choose a palette for category colors",
+                        onClick = { showPaletteSheet = true },
+                        modifier = Modifier.testTag("palette_row"),
+                        leading = { SettingsTileIcon(Icons.Default.Dashboard, "Palette") },
+                        trailing = {
+                            SettingsValue(paletteLabel)
+                            SettingsChevron()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Dynamic Wallpaper Color",
+                        subtitle = "Tint UI using your Android wallpaper (12+)",
+                        leading = { SettingsTileIcon(Icons.Default.Brush, "Dynamic Color") },
+                        trailing = {
+                            Switch(
+                                checked = dynamicColorEnabled,
+                                onCheckedChange = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setDynamicColor(it)
+                                },
+                                modifier = Modifier.testTag("dynamic_color_switch")
+                            )
                         }
                     )
                 }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                // ---------- Currency & Transactions ----------
+                SettingsSectionHeader(
+                    title = "Currency & Transactions",
+                    subtitle = "Set your preferred currency and defaults",
+                    icon = { Icon(imageVector = Icons.Default.Paid, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)) }
+                )
+                SettingsGroupCard {
+                    SettingsRow(
+                        title = "Display Currency Symbol",
+                        subtitle = "Choose how amounts are displayed",
+                        onClick = { showCurrencySheet = true },
+                        modifier = Modifier.testTag("currency_row"),
+                        leading = {
+                            // The tile shows the live symbol so the row reads at a glance
+                            Text(
+                                text = currencySymbol,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Black,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        trailing = {
+                            SettingsValue(currencyLabel)
+                            SettingsChevron()
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Default Transaction Type",
+                        subtitle = "Pre-select type when adding transactions",
+                        onClick = { showTypeSheet = true },
+                        modifier = Modifier.testTag("default_type_row"),
+                        leading = { SettingsTileIcon(Icons.Default.SwapHoriz, "Type") },
+                        trailing = {
+                            SettingsValue(typeLabel)
+                            SettingsChevron()
+                        }
+                    )
+                }
+
+                // ---------- Data Management ----------
+                SettingsSectionHeader(
+                    title = "Data Management",
+                    subtitle = "Backup, restore or clear your data",
+                    icon = { DatabaseGlyph(modifier = Modifier.size(28.dp)) }
+                )
+                SettingsGroupCard {
+                    SettingsRow(
+                        title = "Export Backup (JSON)",
+                        subtitle = "Save your data to a local file",
+                        onClick = { exportLauncher.launch("shylock_backup.json") },
+                        modifier = Modifier.testTag("export_backup_btn"),
+                        leading = { SettingsTileIcon(Icons.Default.FileUpload, "Export") },
+                        trailing = { SettingsChevron() }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Import Backup (JSON)",
+                        subtitle = "Restore your data from a file",
+                        onClick = { importLauncher.launch(arrayOf("application/json")) },
+                        modifier = Modifier.testTag("import_backup_btn"),
+                        leading = { SettingsTileIcon(Icons.Default.FileDownload, "Import") },
+                        trailing = { SettingsChevron() }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Reload Sample Sandbox Data",
+                        subtitle = "Reset with sample data for testing",
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.seedDemoData()
+                            Toast.makeText(context, "Sample sandbox data loaded", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.testTag("reload_sandbox_btn"),
+                        leading = { SettingsTileIcon(Icons.Default.Sync, "Sandbox") },
+                        trailing = { SettingsChevron() }
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // Destructive action: tinted danger row inset inside the card
+                    val danger = MaterialTheme.colorScheme.error
+                    val dangerShape = RoundedCornerShape(16.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .clip(dangerShape)
+                            .background(danger.copy(alpha = 0.10f))
+                            .border(1.dp, danger.copy(alpha = 0.28f), dangerShape)
+                    ) {
+                        SettingsRow(
+                            title = "Clear All Data",
+                            subtitle = "Permanently delete all app data",
+                            accent = danger,
+                            titleColor = danger,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showClearAllDialog = true
+                            },
+                            modifier = Modifier.testTag("clear_everything_btn"),
+                            leading = { SettingsTileIcon(Icons.Default.Delete, "Wipe", tint = danger) },
+                            trailing = { SettingsChevron(tint = danger) }
+                        )
+                    }
+                }
+
+                // ---------- Standalone destinations ----------
+                SettingsGroupCard {
+                    SettingsRow(
+                        title = "Categories & Budgets",
+                        subtitle = "Manage your categories, colors and budget limits",
+                        onClick = { navController.navigate("categories") },
+                        modifier = Modifier.testTag("categories_row"),
+                        leading = { SettingsTileIcon(Icons.Default.PieChart, "Categories") },
+                        trailing = { SettingsChevron() }
+                    )
+                }
+                SettingsGroupCard {
+                    SettingsRow(
+                        title = "About",
+                        subtitle = "App info, version and open source details",
+                        onClick = { showAboutSheet = true },
+                        modifier = Modifier.testTag("about_row"),
+                        leading = { SettingsTileIcon(Icons.Default.Info, "About") },
+                        trailing = { SettingsChevron() }
+                    )
+                }
+            }
+
+            // ---------- Picker sheets ----------
+            if (showAppThemeSheet) {
+                SettingsPickerSheet(
+                    title = "App Theme",
+                    subtitle = "Category colors are set separately",
+                    onDismiss = { showAppThemeSheet = false }
                 ) {
-                    // Section 1: Appearance
-                    Text(
-                        text = "Appearance",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            // Theme mode selector (moved to Settings!)
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Brightness6, contentDescription = "Theme", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("App theme mode", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+                    AppTheme.values().forEach { theme ->
+                        val isSelected = currentAppTheme == theme
+                        val schemeColors = if (isDarkTheme) {
+                            com.example.ui.theme.DarkSchemes[theme] ?: MaterialTheme.colorScheme
+                        } else {
+                            com.example.ui.theme.LightSchemes[theme] ?: MaterialTheme.colorScheme
+                        }
+                        SettingsOptionRow(
+                            selected = isSelected,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (!isSelected) {
+                                    viewModel.setAppTheme(theme)
+                                    Toast.makeText(context, "${theme.displayName()} theme applied", Toast.LENGTH_SHORT).show()
                                 }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    listOf("SYSTEM" to "System", "LIGHT" to "Light", "DARK" to "Dark").forEach { (modeVal, label) ->
-                                        val isSelected = themeMode == modeVal
+                                showAppThemeSheet = false
+                            },
+                            modifier = Modifier.testTag("app_theme_option_${theme.name}")
+                        ) {
+                            Text(
+                                text = theme.displayName(),
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                listOf(
+                                    "Primary" to schemeColors.primary,
+                                    "Secondary" to schemeColors.secondary,
+                                    "Surface" to schemeColors.surface
+                                ).forEach { (label, swatch) ->
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                         Box(
                                             modifier = Modifier
-                                                .weight(1f)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (isSelected) MaterialTheme.colorScheme.primary
-                                                    else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                                                )
-                                                .border(
-                                                    width = 1.dp,
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                                    shape = RoundedCornerShape(10.dp)
-                                                )
-                                                .clickable {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    viewModel.setThemeMode(modeVal)
-                                                    Toast.makeText(context, "Theme mode set to $label", Toast.LENGTH_SHORT).show()
-                                                }
-                                                .padding(vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = label,
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
+                                                .size(14.dp)
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                                .background(swatch)
+                                        )
+                                        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
 
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                            // App Theme selection (live, separate from category palettes)
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Palette, contentDescription = "App Theme", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("App Theme", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+            if (showPaletteSheet) {
+                SettingsPickerSheet(
+                    title = "Global Color Palette",
+                    subtitle = "Colors offered to new and existing categories",
+                    onDismiss = { showPaletteSheet = false }
+                ) {
+                    PaletteTheme.values().forEach { palette ->
+                        val isSelected = currentTheme == palette
+                        val paletteColors = viewModel.palettes[palette] ?: emptyList()
+                        SettingsOptionRow(
+                            selected = isSelected,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (palette != currentTheme) {
+                                    pendingPaletteTheme = palette
+                                    showConfirmationDialog = true
+                                } else {
+                                    Toast.makeText(context, "${palette.name} theme is already active", Toast.LENGTH_SHORT).show()
                                 }
+                                showPaletteSheet = false
+                            },
+                            modifier = Modifier.testTag("palette_option_${palette.name}")
+                        ) {
+                            Text(
+                                text = palette.name.lowercase().replaceFirstChar { it.uppercase() },
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                paletteColors.take(6).forEach { colorString ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(parseHexColor(colorString))
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (showCurrencySheet) {
+                SettingsPickerSheet(
+                    title = "Currency Symbol",
+                    subtitle = "Only changes how amounts are displayed",
+                    onDismiss = { showCurrencySheet = false }
+                ) {
+                    currencyOptions.forEach { (sym, name) ->
+                        val isSelected = currencySymbol == sym
+                        SettingsOptionRow(
+                            selected = isSelected,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (!isSelected) {
+                                    viewModel.setCurrency(sym)
+                                    Toast.makeText(context, "Currency set to $name ($sym)", Toast.LENGTH_SHORT).show()
+                                }
+                                showCurrencySheet = false
+                            },
+                            modifier = Modifier.testTag("currency_option_$name"),
+                            leading = {
                                 Text(
-                                    text = "Changes the overall app colors. Category colors are set separately.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    val isDarkTheme = when (themeMode) {
-                                        "LIGHT" -> false
-                                        "DARK" -> true
-                                        else -> isSystemInDarkTheme()
-                                    }
-                                    AppTheme.values().forEach { theme ->
-                                        val isSelected = currentAppTheme == theme
-                                        val schemeColors = if (isDarkTheme) {
-                                            com.example.ui.theme.DarkSchemes[theme] ?: MaterialTheme.colorScheme
-                                        } else {
-                                            com.example.ui.theme.LightSchemes[theme] ?: MaterialTheme.colorScheme
-                                        }
-                                        
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
-                                                )
-                                                .border(
-                                                    width = if (isSelected) 1.5.dp else 1.dp,
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                                                    shape = RoundedCornerShape(10.dp)
-                                                )
-                                                .clickable {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    viewModel.setAppTheme(theme)
-                                                    Toast.makeText(context, "${theme.displayName()} theme applied", Toast.LENGTH_SHORT).show()
-                                                }
-                                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = theme.displayName(),
-                                                    fontWeight = FontWeight.Bold,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                                Spacer(modifier = Modifier.height(6.dp))
-                                                Row(
-                                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                                                ) {
-                                                    // Primary Swatch
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                    ) {
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .size(14.dp)
-                                                                .clip(RoundedCornerShape(4.dp))
-                                                                .background(schemeColors.primary)
-                                                        )
-                                                        Text("Primary", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    }
-                                                    
-                                                    // Secondary Swatch
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                    ) {
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .size(14.dp)
-                                                                .clip(RoundedCornerShape(4.dp))
-                                                                .background(schemeColors.secondary)
-                                                        )
-                                                        Text("Secondary", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    }
-
-                                                    // Surface Swatch
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                    ) {
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .size(14.dp)
-                                                                .clip(RoundedCornerShape(4.dp))
-                                                                .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                                                .background(schemeColors.surface)
-                                                        )
-                                                        Text("Surface", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    }
-                                                }
-                                            }
-                                            
-                                            if (isSelected) {
-                                                Icon(
-                                                    imageVector = Icons.Default.CheckCircle,
-                                                    contentDescription = "Selected",
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            } else {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(20.dp)
-                                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                            // Palette picker (moved to Settings!)
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Palette, contentDescription = "Palette", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Global Color Palette", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                                }
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    PaletteTheme.values().forEach { palette ->
-                                        val isSelected = currentTheme == palette
-                                        val paletteColors = viewModel.palettes[palette] ?: emptyList()
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
-                                                )
-                                                .border(
-                                                    width = if (isSelected) 1.5.dp else 1.dp,
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                                                    shape = RoundedCornerShape(10.dp)
-                                                )
-                                                .clickable {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    if (palette != currentTheme) {
-                                                        pendingPaletteTheme = palette
-                                                        showConfirmationDialog = true
-                                                    } else {
-                                                        Toast.makeText(context, "${palette.name} theme is already active", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = palette.name.lowercase().replaceFirstChar { it.uppercase() },
-                                                    fontWeight = FontWeight.Bold,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                                Spacer(modifier = Modifier.height(6.dp))
-                                                Row(
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    paletteColors.take(6).forEach { colorString ->
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .size(16.dp)
-                                                                .clip(RoundedCornerShape(4.dp))
-                                                                .background(parseHexColor(colorString))
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                            
-                                            if (isSelected) {
-                                                Icon(
-                                                    imageVector = Icons.Default.CheckCircle,
-                                                    contentDescription = "Selected",
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            } else {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(20.dp)
-                                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                            // Dynamic color toggle (switch)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.ColorLens, contentDescription = "Dynamic Color", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text("Dynamic Wallpaper Color", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                                        Text("Tint UI matching system wallpaper on Android 12+", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                                Switch(
-                                    checked = dynamicColorEnabled,
-                                    onCheckedChange = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.setDynamicColor(it)
-                                    },
-                                    modifier = Modifier.testTag("dynamic_color_switch")
+                                    text = sym,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
-
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                            // Go to Category Management
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { navController.navigate("categories") }
-                                    .padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Category, contentDescription = "Categories", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text("Manage Categories & Budgets", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                                        Text("Create, customize colors, and set spending thresholds", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                                Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Explore", tint = MaterialTheme.colorScheme.primary)
-                            }
+                        ) {
+                            Text(
+                                text = name,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = formatInRupee(12345.0, sym),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
+                }
+            }
 
-                    // Section 2: Preferences
-                    Text(
-                        text = "Preferences",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            // Currency selection
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.AttachMoney, contentDescription = "Currency", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Display Currency Symbol", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+            if (showTypeSheet) {
+                SettingsPickerSheet(
+                    title = "Default Transaction Type",
+                    subtitle = "Pre-selected when you add a new record",
+                    onDismiss = { showTypeSheet = false }
+                ) {
+                    listOf(
+                        Triple("EXPENSE", "Expense", Icons.Default.ArrowUpward),
+                        Triple("INCOME", "Income", Icons.Default.ArrowDownward)
+                    ).forEach { (tValue, label, icon) ->
+                        val isSelected = defaultType == tValue
+                        val tint = if (tValue == "INCOME") IncomeGreen else ExpenseRed
+                        SettingsOptionRow(
+                            selected = isSelected,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (!isSelected) {
+                                    viewModel.setDefaultTransactionType(tValue)
+                                    Toast.makeText(context, "$label default set", Toast.LENGTH_SHORT).show()
                                 }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    listOf("₹" to "Rupee", "$" to "Dollar", "€" to "Euro", "£" to "Pound", "¥" to "Yen").forEach { (sym, name) ->
-                                        val isSelected = currencySymbol == sym
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (isSelected) MaterialTheme.colorScheme.primary
-                                                    else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                                                )
-                                                .border(
-                                                    width = 1.dp,
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                                    shape = RoundedCornerShape(10.dp)
-                                                )
-                                                .clickable {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    viewModel.setCurrency(sym)
-                                                    Toast.makeText(context, "Currency set to $name ($sym)", Toast.LENGTH_SHORT).show()
-                                                }
-                                                .padding(vertical = 10.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = "$sym\n$name",
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                textAlign = TextAlign.Center,
-                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                            // Default transaction type
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.SwapHoriz, contentDescription = "Type", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Default Transaction Type", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    listOf("EXPENSE" to "Expense", "INCOME" to "Income").forEach { (tValue, label) ->
-                                        val isSelected = defaultType == tValue
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(
-                                                    if (isSelected) MaterialTheme.colorScheme.primary
-                                                    else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                                                )
-                                                .border(
-                                                    width = 1.dp,
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                                    shape = RoundedCornerShape(10.dp)
-                                                )
-                                                .clickable {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    viewModel.setDefaultTransactionType(tValue)
-                                                    Toast.makeText(context, "$label default set", Toast.LENGTH_SHORT).show()
-                                                }
-                                                .padding(vertical = 12.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = label,
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                                showTypeSheet = false
+                            },
+                            modifier = Modifier.testTag("default_type_option_$tValue"),
+                            leading = { Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp)) }
+                        ) {
+                            Text(
+                                text = label,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (tValue == "INCOME") "Money coming in" else "Money going out",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
+                }
+            }
 
-                    // Section: Tour & Guided Help
-                    Text(
-                        text = "App Tour & Help",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Card(
+            if (showAboutSheet) {
+                SettingsPickerSheet(
+                    title = "About Shylock",
+                    subtitle = "App info, version and open source details",
+                    onDismiss = { showAboutSheet = false }
+                ) {
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            // Row 1: Start Help & Tour
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { navController.navigate("onboarding_tour") }
-                                    .testTag("onboarding_tour_row")
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                    Icon(imageVector = Icons.Default.Info, contentDescription = "Help & Tour", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text("Help & Onboarding Tour", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                                        Text("Re-run the setup guide tour anytime to review features", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                                Icon(imageVector = Icons.Default.ChevronRight, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary)
-                            }
-
-                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                            // Row 2: Reset Onboarding State
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = "Reset Onboarding", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text("Onboarding Completed State", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                                        Text("Flipping this off shows the welcome wizard on next open", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                                Switch(
-                                    checked = onboardingComplete,
-                                    onCheckedChange = { isComplete ->
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.setOnboardingComplete(isComplete)
-                                        val status = if (isComplete) "Onboarding completed" else "Onboarding reset! Welcome wizard will show again."
-                                        Toast.makeText(context, status, Toast.LENGTH_SHORT).show()
-                                    },
-                                    modifier = Modifier.testTag("onboarding_reset_switch")
-                                )
-                            }
-                        }
-                    }
-
-                    // Section 3: Data Actions
-                    Text(
-                        text = "Data Operations",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Button(
-                                onClick = { exportLauncher.launch("shylock_backup.json") },
-                                modifier = Modifier.fillMaxWidth().testTag("export_backup_btn"),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.Share, contentDescription = "Export")
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Export Backup (JSON)", fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = { importLauncher.launch(arrayOf("application/json")) },
-                                modifier = Modifier.fillMaxWidth().testTag("import_backup_btn"),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.CloudDownload, contentDescription = "Import")
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Import Backup (JSON)", fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.seedDemoData()
-                                    Toast.makeText(context, "Sandbox sandbox data loaded", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.fillMaxWidth().testTag("reload_sandbox_btn"),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.AutoMode, contentDescription = "Sandbox")
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Reload Sample Sandbox Data", fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    showClearAllDialog = true
-                                },
-                                modifier = Modifier.fillMaxWidth().testTag("clear_everything_btn"),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.DeleteForever, contentDescription = "Wipe")
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Clear All Data", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-
-                    // Section 4: About
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f))
-                    ) {
-                        Column(
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(18.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                .size(64.dp)
+                                .liquidGlass(shape = CircleShape, strength = 0.9f, elevation = 6.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.AccountBalanceWallet,
@@ -1955,28 +1854,49 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(32.dp)
                             )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        ShylockWordmark(fontSize = 24.sp)
+                        Text(
+                            text = "Your color-guided personal finance companion.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(18.dp))
+                    listOf(
+                        Triple(Icons.Default.Info, "Version", "1.2"),
+                        Triple(Icons.Default.Code, "License", "Open Source"),
+                        Triple(Icons.Default.PhoneAndroid, "Built with", "Kotlin • Jetpack Compose"),
+                        Triple(Icons.Default.Lock, "Privacy", "All data stays on this device")
+                    ).forEach { (icon, label, value) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(imageVector = icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = "Shylock Finance",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Your color-guided personal finance companion.",
-                                style = MaterialTheme.typography.bodySmall,
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
+                                modifier = Modifier.weight(1f)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Version 1.2 • Open Source sandbox tracker",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.outline
+                                text = value,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                     }
                 }
             }
+        }
 
             // === Destination 4: Manage Categories Screen ===
             composable("categories") {
@@ -2625,6 +2545,395 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     }
 }
 
+// ===================== Settings screen building blocks =====================
+
+// Page header for Settings: big title + tagline on the left, a glass version chip on the right,
+// and a soft glowing crescent painted behind them so the header ties into the ambient background.
+@Composable
+fun SettingsHeader(modifier: Modifier = Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val r = size.width * 0.115f
+                val c = Offset(size.width * 0.66f, size.height * 0.52f)
+                // Ambient halo
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(accent.copy(alpha = 0.16f), Color.Transparent),
+                        center = c,
+                        radius = r * 1.9f
+                    ),
+                    radius = r * 1.9f,
+                    center = c
+                )
+                // Crescent: a thick ring whose brightness fades around the circumference
+                drawCircle(
+                    brush = Brush.sweepGradient(
+                        0.00f to accent.copy(alpha = 0.18f),
+                        0.14f to Color.Transparent,
+                        0.40f to Color.Transparent,
+                        0.56f to accent.copy(alpha = 0.32f),
+                        0.76f to accent.copy(alpha = 0.55f),
+                        0.94f to accent.copy(alpha = 0.28f),
+                        1.00f to accent.copy(alpha = 0.18f),
+                        center = c
+                    ),
+                    radius = r,
+                    center = c,
+                    style = Stroke(width = r * 0.55f)
+                )
+            }
+            .padding(top = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Settings",
+                fontSize = 30.sp,
+                lineHeight = 34.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = (-0.5).sp,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = "Customize your Shylock experience",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        // Version chip
+        Row(
+            modifier = Modifier
+                .liquidGlass(shape = RoundedCornerShape(18.dp), strength = 0.95f, elevation = 6.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .liquidGlass(shape = CircleShape, strength = 0.8f),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                ShylockWordmark(fontSize = 12.sp, letterSpacing = 3.sp)
+                Text(
+                    text = "v1.2 • Open Source",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+// Section label with a leading accent icon and a one-line description
+@Composable
+fun SettingsSectionHeader(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    icon: @Composable () -> Unit
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, end = 4.dp, top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) { icon() }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column {
+            Text(
+                text = title,
+                fontSize = 19.sp,
+                lineHeight = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// Glass container that groups settings rows; rows supply their own inner padding
+@Composable
+fun SettingsGroupCard(
+    modifier: Modifier = Modifier,
+    elevation: Dp = 0.dp,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    GlassCard(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        elevation = elevation,
+        contentPadding = PaddingValues(6.dp),
+        content = content
+    )
+}
+
+// One settings entry: tinted icon tile, title + subtitle, and a trailing control or disclosure
+@Composable
+fun SettingsRow(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    accent: Color = MaterialTheme.colorScheme.primary,
+    titleColor: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: (() -> Unit)? = null,
+    leading: @Composable BoxScope.() -> Unit,
+    trailing: @Composable RowScope.() -> Unit = {}
+) {
+    val rowShape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(rowShape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 10.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SettingsTile(accent = accent, content = leading)
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Bold,
+                color = titleColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            trailing()
+        }
+    }
+}
+
+// Rounded square icon well tinted with the row's accent — reads as a second layer of glass
+@Composable
+fun SettingsTile(
+    accent: Color = MaterialTheme.colorScheme.primary,
+    size: Dp = 46.dp,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val tileShape = RoundedCornerShape(14.dp)
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(tileShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(accent.copy(alpha = 0.26f), accent.copy(alpha = 0.10f))
+                )
+            )
+            .border(1.dp, accent.copy(alpha = 0.30f), tileShape),
+        contentAlignment = Alignment.Center,
+        content = content
+    )
+}
+
+@Composable
+fun SettingsTileIcon(
+    icon: ImageVector,
+    contentDescription: String?,
+    tint: Color = MaterialTheme.colorScheme.primary
+) {
+    Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        tint = tint,
+        modifier = Modifier.size(23.dp)
+    )
+}
+
+@Composable
+fun SettingsChevron(tint: Color = MaterialTheme.colorScheme.primary) {
+    Icon(
+        imageVector = Icons.Default.ChevronRight,
+        contentDescription = null,
+        tint = tint,
+        modifier = Modifier.size(24.dp)
+    )
+}
+
+// Current value shown before the chevron on disclosure rows
+@Composable
+fun SettingsValue(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.widthIn(max = 120.dp)
+    )
+}
+
+@Composable
+fun SettingsDivider() {
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+        modifier = Modifier.padding(horizontal = 10.dp)
+    )
+}
+
+// Bottom sheet shell shared by the Settings pickers: title row with a close button, then content
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsPickerSheet(
+    title: String,
+    subtitle: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            content()
+        }
+    }
+}
+
+// Selectable option inside a picker sheet: optional leading glyph, caller-supplied body, check mark
+@Composable
+fun SettingsOptionRow(
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leading: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
+            )
+            .border(
+                width = if (selected) 1.5.dp else 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                shape = shape
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (leading != null) {
+            Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) { leading() }
+            Spacer(modifier = Modifier.width(12.dp))
+        }
+        Column(modifier = Modifier.weight(1f), content = content)
+        Spacer(modifier = Modifier.width(12.dp))
+        if (selected) {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), CircleShape)
+            )
+        }
+    }
+}
+
+// Stacked-cylinder "database" glyph; Material's icon set has no direct equivalent
+@Composable
+fun DatabaseGlyph(
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary
+) {
+    val gap = MaterialTheme.colorScheme.background
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val capH = h * 0.30f
+        // Body between the two end caps
+        drawRect(color = color, topLeft = Offset(0f, capH / 2f), size = Size(w, h - capH))
+        drawOval(color = color, topLeft = Offset(0f, h - capH), size = Size(w, capH))
+        // Separator arcs carve the body into three discs
+        listOf(0.42f, 0.70f).forEach { f ->
+            drawArc(
+                color = gap.copy(alpha = 0.85f),
+                startAngle = 0f,
+                sweepAngle = 180f,
+                useCenter = false,
+                topLeft = Offset(0f, h * f - capH / 2f),
+                size = Size(w, capH),
+                style = Stroke(width = h * 0.09f)
+            )
+        }
+        // Lit top cap
+        drawOval(color = lerp(color, Color.White, 0.30f), topLeft = Offset(0f, 0f), size = Size(w, capH))
+    }
+}
+
 // Utility: parse hex accurately or fallback
 fun parseHexColor(hex: String, fallback: Color = Color.Gray): Color {
     return try {
@@ -2691,20 +3000,24 @@ fun AutoShrinkText(
 
 // Two-tone "SHYLOCK" wordmark shared by the Home and Insights headers
 @Composable
-fun ShylockWordmark(modifier: Modifier = Modifier, fontSize: androidx.compose.ui.unit.TextUnit = 22.sp) {
+fun ShylockWordmark(
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 22.sp,
+    letterSpacing: androidx.compose.ui.unit.TextUnit = 6.sp
+) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = "SHY",
             fontSize = fontSize,
             fontWeight = FontWeight.Black,
-            letterSpacing = 6.sp,
+            letterSpacing = letterSpacing,
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
             text = "LOCK",
             fontSize = fontSize,
             fontWeight = FontWeight.Black,
-            letterSpacing = 6.sp,
+            letterSpacing = letterSpacing,
             color = MaterialTheme.colorScheme.primary
         )
     }
@@ -5800,716 +6113,3 @@ fun AddTransactionDialog(
         }
     }
 }
-
-
-data class OnboardingCategory(
-    val id: String,
-    val name: String,
-    val iconName: String,
-    val budget: Double,
-    val subcategories: List<String>,
-    val isCustom: Boolean = false,
-    val customColorHex: String? = null,
-    val type: String = "EXPENSE"
-)
-
-@Composable
-fun OnboardingWizard(
-    viewModel: CategoryViewModel,
-    isTour: Boolean = false,
-    onComplete: () -> Unit
-) {
-    val currentTheme by viewModel.currentPaletteTheme.collectAsStateWithLifecycle()
-    val currencySymbol by viewModel.currency.collectAsStateWithLifecycle()
-    val defaultType by viewModel.defaultTransactionType.collectAsStateWithLifecycle()
-    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
-    
-    var currentStep by remember { mutableStateOf(1) }
-    
-    // Choose active theme color accents dynamically for styling the onboarding flow
-    val themeColorHex = remember(currentTheme) {
-        val colorsList = viewModel.palettes[currentTheme] ?: listOf("#4D96FF")
-        colorsList.getOrNull(1) ?: colorsList.firstOrNull() ?: "#4D96FF"
-    }
-    val themeColor = remember(themeColorHex) { parseHexColor(themeColorHex) }
-    
-    // Step 4 states remembered at the top level so they are not lost on back/forward
-    val checklist = remember {
-        mutableStateListOf(
-            // Expense Categories
-            OnboardingCategory(id = "1", name = "Food", iconName = "dining", budget = 0.0, subcategories = listOf("Groceries", "Restaurants", "Coffee"), type = "EXPENSE"),
-            OnboardingCategory(id = "2", name = "Transportation", iconName = "car", budget = 0.0, subcategories = listOf("Fuel", "Transit", "Taxi"), type = "EXPENSE"),
-            OnboardingCategory(id = "3", name = "Health", iconName = "hospital", budget = 0.0, subcategories = listOf("Medicine", "Doctor"), type = "EXPENSE"),
-            OnboardingCategory(id = "4", name = "Housing / Rent", iconName = "house", budget = 0.0, subcategories = listOf("Apartment Rent", "Maintenance"), type = "EXPENSE"),
-            OnboardingCategory(id = "5", name = "Shopping", iconName = "bag", budget = 0.0, subcategories = listOf("Clothing", "Electronics"), type = "EXPENSE"),
-            OnboardingCategory(id = "6", name = "Entertainment", iconName = "play", budget = 0.0, subcategories = listOf("Movies", "Subscriptions"), type = "EXPENSE"),
-            OnboardingCategory(id = "7", name = "Bills & Utilities", iconName = "invoice", budget = 0.0, subcategories = listOf("Electricity", "Water", "Internet"), type = "EXPENSE"),
-            OnboardingCategory(id = "8", name = "Education", iconName = "book", budget = 0.0, subcategories = listOf("Books", "Tuition"), type = "EXPENSE"),
-            OnboardingCategory(id = "9", name = "Fitness", iconName = "gym", budget = 0.0, subcategories = listOf("Gym Membership", "Equipment"), type = "EXPENSE"),
-            OnboardingCategory(id = "10", name = "Travel", iconName = "plane", budget = 0.0, subcategories = listOf("Flights", "Hotels"), type = "EXPENSE"),
-            // Income Categories
-            OnboardingCategory(id = "11", name = "Salary", iconName = "wallet", budget = 0.0, subcategories = listOf("Monthly Pay", "Bonus"), type = "INCOME"),
-            OnboardingCategory(id = "12", name = "Business", iconName = "work", budget = 0.0, subcategories = listOf("Client Invoice", "Consulting"), type = "INCOME"),
-            OnboardingCategory(id = "13", name = "Gifts", iconName = "gift", budget = 0.0, subcategories = listOf("Presents", "Donations"), type = "INCOME"),
-            OnboardingCategory(id = "14", name = "Interest", iconName = "trending_up", budget = 0.0, subcategories = listOf("Dividends", "Savings Interest"), type = "INCOME")
-        )
-    }
-    
-    val checkedMap = remember {
-        mutableStateMapOf<String, Boolean>().apply {
-            checklist.forEach { put(it.id, it.id in listOf("1", "2", "3", "4", "7", "11", "12")) }
-        }
-    }
-    
-    var customCatName by remember { mutableStateOf("") }
-    
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 480.dp)
-                .testTag("onboarding_card"),
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Header standard top indicators + Skip option
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Step $currentStep of 4",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                    TextButton(
-                        onClick = onComplete,
-                        modifier = Modifier.testTag("onboarding_skip_btn")
-                    ) {
-                        Text(
-                            text = if (isTour) {
-                                "Exit Tour"
-                            } else {
-                                if (currentStep == 1) "Skip Setup" else "Skip"
-                            },
-                            fontWeight = FontWeight.ExtraBold,
-                            color = themeColor
-                        )
-                    }
-                }
-                
-                // Unified progress indicator line
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    for (i in 1..4) {
-                        val isActive = i <= currentStep
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(if (isActive) themeColor else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        )
-                    }
-                }
-                
-                // Screen content according to stage
-                when (currentStep) {
-                    1 -> {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Icon(
-                            imageVector = Icons.Default.TrendingUp,
-                            contentDescription = "Welcome Logo",
-                            tint = themeColor,
-                            modifier = Modifier.size(80.dp)
-                        )
-                        
-                        Text(
-                            text = "Shylock",
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.Black,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        
-                        Text(
-                            text = "Your visually beautiful personal finance assistant. Track expenses with custom, contrast-validated color categories, budgets, and automated insights.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            lineHeight = 22.sp
-                        )
-                        
-                        Text(
-                            text = "Let's set up your spending categories and customize your visual budget layout to get started.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = themeColor,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            lineHeight = 20.sp
-                        )
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        Button(
-                            onClick = { currentStep = 2 },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .testTag("onboarding_next_btn1"),
-                            colors = ButtonDefaults.buttonColors(containerColor = themeColor),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("Get started", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Icon(imageVector = Icons.Default.ArrowForward, contentDescription = "Next")
-                        }
-                    }
-                    
-                    2 -> {
-                        Text(
-                            text = "Select Default Currency",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        
-                        Text(
-                            text = "Choose your preferred currency format. This symbol will be used everywhere throughout Shylock for transaction records, stats, and budget metrics.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            lineHeight = 20.sp
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            listOf("₹", "$", "€", "£", "¥").forEach { symbol ->
-                                val isSelected = symbol == currencySymbol
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(if (isSelected) themeColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                        .border(
-                                            width = if (isSelected) 2.dp else 1.dp,
-                                            color = if (isSelected) themeColor else Color.Transparent,
-                                            shape = RoundedCornerShape(10.dp)
-                                        )
-                                        .clickable { viewModel.setCurrency(symbol) }
-                                        .padding(vertical = 14.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = symbol,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 18.sp,
-                                        color = if (isSelected) themeColor else MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { currentStep = 1 },
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Back")
-                            }
-                            
-                            Button(
-                                onClick = { currentStep = 3 },
-                                modifier = Modifier
-                                    .weight(1.5f)
-                                    .height(48.dp)
-                                    .testTag("onboarding_next_btn2"),
-                                colors = ButtonDefaults.buttonColors(containerColor = themeColor),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Next", fontWeight = FontWeight.Bold)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(imageVector = Icons.Default.ArrowForward, contentDescription = "Next Step")
-                            }
-                        }
-                    }
-                    
-                    3 -> {
-                        Text(
-                            text = "Style & Appearance",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        
-                        Text(
-                            text = "Make it yours! Select your favorite theme mode and color palette to customize Shylock's flavor.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            lineHeight = 18.sp
-                        )
-                        
-                        // Small aesthetic live preview card
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.5.dp, themeColor.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(24.dp)
-                                                .clip(CircleShape)
-                                                .background(themeColor),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Category,
-                                                contentDescription = null,
-                                                tint = getContrastColor(themeColorHex),
-                                                modifier = Modifier.size(12.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = "Sample Category Preview",
-                                            fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = "Spent Today: $currencySymbol 45.90",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Target Limit: $currencySymbol 100",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                                LinearProgressIndicator(
-                                    progress = { 0.46f },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(6.dp)
-                                        .clip(RoundedCornerShape(3.dp)),
-                                    color = themeColor,
-                                    trackColor = themeColor.copy(alpha = 0.12f)
-                                )
-                            }
-                        }
-                        
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // Light / Dark mode mode selector
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf("SYSTEM" to "System", "LIGHT" to "Light", "DARK" to "Dark").forEach { (modeVal, label) ->
-                                    val isSelected = themeMode == modeVal
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(
-                                                if (isSelected) themeColor
-                                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                            )
-                                            .border(
-                                                width = 1.dp,
-                                                color = if (isSelected) themeColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                                                shape = RoundedCornerShape(8.dp)
-                                            )
-                                            .clickable { viewModel.setThemeMode(modeVal) }
-                                            .padding(vertical = 8.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp,
-                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            // Scrollable or listing palette schemes
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                PaletteTheme.values().forEach { palette ->
-                                    val isSelected = palette == currentTheme
-                                    val paletteColors = viewModel.palettes[palette] ?: emptyList()
-                                    
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(if (isSelected) themeColor.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
-                                            .border(
-                                                width = if (isSelected) 1.5.dp else 1.dp,
-                                                color = if (isSelected) themeColor else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                                                shape = RoundedCornerShape(10.dp)
-                                            )
-                                            .clickable { viewModel.setPaletteTheme(palette) }
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = palette.name.lowercase().replaceFirstChar { it.uppercase() },
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Row(
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                paletteColors.take(6).forEach { colorString ->
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .size(16.dp)
-                                                            .clip(RoundedCornerShape(4.dp))
-                                                            .background(parseHexColor(colorString))
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        
-                                        RadioButton(
-                                            selected = isSelected,
-                                            onClick = { viewModel.setPaletteTheme(palette) },
-                                            colors = RadioButtonDefaults.colors(selectedColor = themeColor)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { currentStep = 2 },
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Back")
-                            }
-                            
-                            Button(
-                                onClick = { currentStep = 4 },
-                                modifier = Modifier
-                                    .weight(1.5f)
-                                    .height(48.dp)
-                                    .testTag("onboarding_next_btn3"),
-                                colors = ButtonDefaults.buttonColors(containerColor = themeColor),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Next", fontWeight = FontWeight.Bold)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(imageVector = Icons.Default.ArrowForward, contentDescription = "Next Step")
-                            }
-                        }
-                    }
-                    
-                    4 -> {
-                        var onboardingTypeTab by remember { mutableStateOf("EXPENSE") }
-                        val expenseSelectedCount = checklist.count { it.type == "EXPENSE" && checkedMap[it.id] == true }
-                        val incomeSelectedCount = checklist.count { it.type == "INCOME" && checkedMap[it.id] == true }
-                        val isIncomeTab = onboardingTypeTab == "INCOME"
-                        val activeTabColor = if (isIncomeTab) Color(0xFF2E7D32) else themeColor
-
-                        Text(
-                            text = "Set Up Your Categories",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        
-                        Text(
-                            text = "Choose your starting budget categories. Uncheck any category to exclude it, or add custom ones.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            lineHeight = 16.sp
-                        )
-
-                        // Expense vs Income Tabs
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                                .padding(3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            listOf(
-                                "EXPENSE" to "Expenses ($expenseSelectedCount)",
-                                "INCOME" to "Income ($incomeSelectedCount)"
-                            ).forEach { (typeVal, label) ->
-                                val isSelected = onboardingTypeTab == typeVal
-                                val tabColor = if (typeVal == "INCOME") Color(0xFF2E7D32) else themeColor
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(if (isSelected) tabColor.copy(alpha = 0.15f) else Color.Transparent)
-                                        .border(
-                                            width = if (isSelected) 1.5.dp else 0.dp,
-                                            color = if (isSelected) tabColor else Color.Transparent,
-                                            shape = RoundedCornerShape(10.dp)
-                                        )
-                                        .clickable { onboardingTypeTab = typeVal }
-                                        .padding(vertical = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = label,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) tabColor else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                        
-                        // Checklist column filtered by active tab
-                        val displayedChecklist = checklist.filter { it.type == onboardingTypeTab }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 210.dp)
-                                .verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            displayedChecklist.forEachIndexed { index, cat ->
-                                val catChecked = checkedMap[cat.id] ?: true
-                                val colorsList = viewModel.palettes[currentTheme] ?: listOf("#4D96FF")
-                                val catColorStr = if (cat.isCustom) {
-                                    cat.customColorHex ?: (colorsList.getOrNull((index + checklist.size) % colorsList.size) ?: colorsList.first())
-                                } else {
-                                    colorsList.getOrNull(index % colorsList.size) ?: colorsList.first()
-                                }
-                                val catColor = parseHexColor(catColorStr)
-                                
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { checkedMap[cat.id] = !catChecked }
-                                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Checkbox(
-                                            checked = catChecked,
-                                            onCheckedChange = { checkedMap[cat.id] = it },
-                                            colors = CheckboxDefaults.colors(checkedColor = activeTabColor)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(CircleShape)
-                                                .background(catColor),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = getIconVector(cat.iconName),
-                                                contentDescription = null,
-                                                tint = getContrastColor(catColorStr),
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column {
-                                            Text(
-                                                text = cat.name,
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            if (cat.subcategories.isNotEmpty()) {
-                                                Text(
-                                                    text = cat.subcategories.joinToString(", "),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Quick textfield to add a custom category
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = customCatName,
-                                onValueChange = { customCatName = it },
-                                placeholder = {
-                                    Text(
-                                        if (isIncomeTab) "E.g., Freelance, Dividends" else "E.g., Subscription, Gym",
-                                        fontSize = 13.sp
-                                    )
-                                },
-                                modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = activeTabColor,
-                                    cursorColor = activeTabColor
-                                )
-                            )
-                            IconButton(
-                                onClick = {
-                                    if (customCatName.isNotBlank()) {
-                                        val trimmedName = customCatName.trim()
-                                        if (!checklist.any { it.name.equals(trimmedName, ignoreCase = true) }) {
-                                            val newCat = OnboardingCategory(
-                                                id = java.util.UUID.randomUUID().toString(),
-                                                name = trimmedName,
-                                                iconName = if (isIncomeTab) "wallet" else "category",
-                                                budget = 0.0,
-                                                subcategories = emptyList(),
-                                                isCustom = true,
-                                                type = onboardingTypeTab
-                                            )
-                                            checklist.add(newCat)
-                                            checkedMap[newCat.id] = true
-                                        }
-                                        customCatName = ""
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(activeTabColor, RoundedCornerShape(10.dp)),
-                                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-                            ) {
-                                Icon(imageVector = Icons.Default.Add, contentDescription = "Add custom category")
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(4.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { currentStep = 3 },
-                                modifier = Modifier.weight(1f).height(48.dp),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Back")
-                            }
-                            
-                            Button(
-                                onClick = {
-                                    if (!isTour) {
-                                        val colorsList = viewModel.palettes[currentTheme] ?: listOf("#4D96FF")
-                                        val checkedItems = checklist.filter { checkedMap[it.id] == true }
-                                        checkedItems.forEachIndexed { index, cat ->
-                                            val colorStr = if (cat.isCustom) {
-                                                cat.customColorHex ?: (colorsList.getOrNull((index + checklist.size) % colorsList.size) ?: colorsList.first())
-                                            } else {
-                                                colorsList.getOrNull(index % colorsList.size) ?: colorsList.first()
-                                            }
-                                            viewModel.addCategory(
-                                                name = cat.name,
-                                                colorHex = colorStr,
-                                                iconName = cat.iconName,
-                                                budget = cat.budget,
-                                                subcategoriesList = cat.subcategories,
-                                                type = cat.type
-                                            )
-                                        }
-                                    }
-                                    onComplete()
-                                },
-                                modifier = Modifier
-                                    .weight(1.5f)
-                                    .height(48.dp)
-                                    .testTag("onboarding_finish_btn"),
-                                colors = ButtonDefaults.buttonColors(containerColor = themeColor),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Let's Track!", fontWeight = FontWeight.Bold)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(imageVector = Icons.Default.Check, contentDescription = "Finished")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
