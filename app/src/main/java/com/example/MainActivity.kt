@@ -76,6 +76,7 @@ import com.example.data.model.DetectedPayment
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
 import com.example.data.model.displayName
+import com.example.ui.screens.CategoryEditorDialog
 import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.LendingListScreen
 import com.example.ui.screens.LendingSummaryCard
@@ -182,54 +183,12 @@ fun formatInRupee(amount: Double, currency: String = "₹"): String {
     }
 }
 
-// Map strings to beautiful Material Icon vectors
-fun getIconVector(name: String): ImageVector {
-    return when (name.lowercase()) {
-        "restaurant", "food", "dining" -> Icons.Default.Restaurant
-        "directions_car", "transport", "car" -> Icons.Default.DirectionsCar
-        "shopping_bag", "shopping", "bag" -> Icons.Default.ShoppingBag
-        "medical_services", "health", "hospital" -> Icons.Default.MedicalServices
-        "movie", "entertainment", "play" -> Icons.Default.Movie
-        "receipt_long", "bills", "invoice" -> Icons.Default.ReceiptLong
-        "flight", "travel", "plane" -> Icons.Default.Flight
-        "school", "education", "book" -> Icons.Default.School
-        "fitness_center", "gym" -> Icons.Default.FitnessCenter
-        "home", "house" -> Icons.Default.Home
-        "build", "tools" -> Icons.Default.Build
-        "pets" -> Icons.Default.Pets
-        "wallet", "salary", "account_balance_wallet" -> Icons.Default.AccountBalanceWallet
-        "work", "business" -> Icons.Default.Work
-        "gift", "card_giftcard" -> Icons.Default.CardGiftcard
-        "trending_up", "interest" -> Icons.AutoMirrored.Filled.TrendingUp
-        else -> Icons.Default.Category
-    }
-}
+// Resolves a persisted icon key (see CategoryIcons.kt) to a glyph, falling back to the generic tag
+fun getIconVector(name: String): ImageVector = findCategoryIcon(name) ?: Icons.Default.Category
 
-// Map subcategory names to appropriate, compile-safe Material Icon vectors
-fun getSubcategoryIcon(name: String): ImageVector {
-    val lower = name.lowercase()
-    return when {
-        lower.contains("breakfast") || lower.contains("lunch") || lower.contains("dinner") || lower.contains("snack") || lower.contains("tea") || lower.contains("coffee") || lower.contains("food") || lower.contains("dining") -> Icons.Default.Restaurant
-        lower.contains("fuel") || lower.contains("gas") || lower.contains("petrol") || lower.contains("car") || lower.contains("taxi") || lower.contains("cab") -> Icons.Default.DirectionsCar
-        lower.contains("train") || lower.contains("metro") || lower.contains("bus") || lower.contains("transit") || lower.contains("flight") || lower.contains("travel") -> Icons.Default.Flight
-        lower.contains("movie") || lower.contains("show") || lower.contains("theater") || lower.contains("play") || lower.contains("game") || lower.contains("entertainment") -> Icons.Default.Movie
-        lower.contains("gym") || lower.contains("workout") || lower.contains("fitness") -> Icons.Default.FitnessCenter
-        lower.contains("rent") || lower.contains("bill") || lower.contains("electricity") || lower.contains("water") || lower.contains("utility") -> Icons.Default.ReceiptLong
-        lower.contains("hospital") || lower.contains("doctor") || lower.contains("health") || lower.contains("medicine") || lower.contains("dental") -> Icons.Default.MedicalServices
-        lower.contains("pet") || lower.contains("dog") || lower.contains("cat") -> Icons.Default.Pets
-        lower.contains("book") || lower.contains("school") || lower.contains("education") || lower.contains("class") -> Icons.Default.School
-        lower.contains("rent") || lower.contains("home") || lower.contains("house") -> Icons.Default.Home
-        lower.contains("repair") || lower.contains("tool") || lower.contains("fix") -> Icons.Default.Build
-        lower.contains("shop") || lower.contains("cloth") || lower.contains("grocer") || lower.contains("bag") -> Icons.Default.ShoppingBag
-        else -> Icons.Default.Category
-    }
-}
-
-val ICON_OPTIONS = listOf(
-    "restaurant", "directions_car", "shopping_bag", "medical_services",
-    "movie", "receipt_long", "flight", "school", "fitness_center", "home",
-    "build", "pets"
-)
+// Name-based guess for subcategories that never had an icon assigned
+fun getSubcategoryIcon(name: String): ImageVector =
+    findCategoryIcon(guessSubcategoryIconName(name)) ?: Icons.Default.Category
 
 enum class AnalysisPeriod {
     WEEKLY, MONTHLY, YEARLY
@@ -2446,7 +2405,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             initialType = addCategoryDefaultType,
             onDismiss = { showAddCategoryDialog = false },
             onSave = { name, colorHex, icon, budget, subsList, catType ->
-                viewModel.addCategory(name, colorHex, icon, budget, subsList.map { it.name }, catType)
+                viewModel.addCategory(name, colorHex, icon, budget, subsList, catType)
                 showAddCategoryDialog = false
                 Toast.makeText(context, "Category added successfully!", Toast.LENGTH_SHORT).show()
             }
@@ -2462,14 +2421,18 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             initialType = category.type,
             subcategories = currentSubs,
             onDismiss = { editCategoryTarget = null },
-            onSave = { name, colorHex, icon, budget, subsListWithColor, catType ->
+            onDelete = {
+                editCategoryTarget = null
+                categoryToDelete = category
+            },
+            onSave = { name, colorHex, icon, budget, subsList, catType ->
                 viewModel.editCategory(
                     id = category.id,
                     name = name,
                     colorHex = colorHex,
                     iconName = icon,
                     budget = budget,
-                    subcategoriesList = subsListWithColor.map { it.name to it.colorHexOverride },
+                    subcategoriesList = subsList,
                     type = catType
                 )
                 editCategoryTarget = null
@@ -5044,11 +5007,11 @@ fun UpgradedManageCategoryCard(
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(subColor)
+                                Icon(
+                                    imageVector = subcategoryIconVector(sub, category),
+                                    contentDescription = null,
+                                    tint = subColor,
+                                    modifier = Modifier.size(12.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
@@ -5344,7 +5307,8 @@ fun TransactionItemRow(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = getIconVector(category?.iconName ?: "help"),
+                    imageVector = if (subcategory != null) subcategoryIconVector(subcategory, category)
+                                  else getIconVector(category?.iconName ?: "help"),
                     contentDescription = category?.displayName ?: "Unknown category",
                     tint = getContrastColor(visualColor),
                     modifier = Modifier.size(19.dp)
@@ -5444,379 +5408,6 @@ fun TransactionItemRow(
                         tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
                         modifier = Modifier.size(16.dp)
                     )
-                }
-            }
-        }
-    }
-}
-
-// Subcategory Edit row data class helper
-data class SubcategoryEditorItem(
-    val id: Int = 0,
-    val name: String,
-    val colorHexOverride: String? = null
-)
-
-// Modal Window: Category Form Editor with unique constraints & smart suggestions
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun CategoryEditorDialog(
-    viewModel: CategoryViewModel,
-    category: Category? = null,
-    initialType: String = "EXPENSE",
-    subcategories: List<Subcategory> = emptyList(),
-    onDismiss: () -> Unit,
-    onSave: (name: String, colorHex: String, iconName: String, budget: Double, subcategories: List<SubcategoryEditorItem>, type: String) -> Unit
-) {
-    val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
-    var name by remember { mutableStateOf(category?.name ?: "") }
-    var colorHex by remember { mutableStateOf(category?.colorHex ?: "") }
-    var iconName by remember { mutableStateOf(category?.iconName ?: "restaurant") }
-    var budgetStr by remember { mutableStateOf(category?.budgetLimit?.toInt()?.toString() ?: "") }
-    var categoryType by remember { mutableStateOf(category?.type ?: initialType) }
-
-    // Subcategories listing inside editor
-    val subList = remember {
-        mutableStateListOf<SubcategoryEditorItem>().apply {
-            addAll(subcategories.map { SubcategoryEditorItem(it.id, it.name, it.colorHexOverride) })
-        }
-    }
-    var newSubcategoryName by remember { mutableStateOf("") }
-
-    // Validation & Warning status holding
-    var isDuplicateError by remember { mutableStateOf(false) }
-    var similarityWarning by remember { mutableStateOf<String?>(null) }
-    
-    // Auto color recommendation palette suggestions
-    val smartSuggestions = remember(viewModel.categories.collectAsStateWithLifecycle().value, viewModel.currentPaletteTheme.collectAsStateWithLifecycle().value) {
-        viewModel.getSmartColorSuggestions()
-    }
-
-    // Set initial auto suggested color if creating new category and none picked
-    LaunchedEffect(smartSuggestions, colorHex) {
-        if (category == null && colorHex.isEmpty() && smartSuggestions.isNotEmpty()) {
-            colorHex = smartSuggestions.first()
-        }
-    }
-
-    // Checking validation constraints on color choice
-    LaunchedEffect(colorHex) {
-        if (colorHex.isNotEmpty()) {
-            isDuplicateError = viewModel.isColorAlreadyAssigned(colorHex, category?.id)
-            val similarity = viewModel.isColorTooSimilar(colorHex, category?.id)
-            similarityWarning = if (similarity.first) similarity.second else null
-        } else {
-            isDuplicateError = false
-            similarityWarning = null
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(8.dp, RoundedCornerShape(20.dp))
-                .testTag("category_editor_dialog"),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(18.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = if (category == null) "Create Category" else "Update Category",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                // Category Type Selection (Expense vs Income)
-                Text(
-                    text = "Category Type",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    val types = listOf("EXPENSE" to "Expense", "INCOME" to "Income")
-                    types.forEach { (typeVal, label) ->
-                        val isSelected = categoryType == typeVal
-                        val activeColor = if (typeVal == "INCOME") Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (isSelected) activeColor.copy(alpha = 0.15f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                                )
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) activeColor else Color.LightGray.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .clickable { categoryType = typeVal }
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSelected) activeColor else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-
-                // Name field
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Category Name") },
-                    modifier = Modifier.fillMaxWidth().testTag("cat_name_input"),
-                    singleLine = true
-                )
-
-                // Budget Limit field
-                OutlinedTextField(
-                    value = budgetStr,
-                    onValueChange = { budgetStr = it },
-                    label = { Text("Budget Limit (₹)") },
-                    modifier = Modifier.fillMaxWidth().testTag("cat_budget_input"),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true
-                )
-
-                // Theme Icons Selector grid
-                Text(
-                    text = "Category Icon",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ICON_OPTIONS.forEach { icon ->
-                        val isSelected = iconName == icon
-                        IconButton(
-                            onClick = { iconName = icon },
-                            colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                            ),
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(
-                                imageVector = getIconVector(icon),
-                                contentDescription = icon,
-                                modifier = Modifier.size(24.dp),
-                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-
-                // Pick Custom Color hex representation
-                OutlinedTextField(
-                    value = colorHex,
-                    onValueChange = { colorHex = it },
-                    label = { Text("Category Theme Color Hex") },
-                    isError = isDuplicateError,
-                    modifier = Modifier.fillMaxWidth().testTag("cat_color_input"),
-                    placeholder = { Text("#FF6B6B") },
-                    trailingIcon = {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(parseHexColor(colorHex))
-                        )
-                    },
-                    singleLine = true
-                )
-
-                // Error Warning Prompts
-                if (isDuplicateError) {
-                    Text(
-                        text = "This color is already assigned to another category.",
-                        color = Color.Red,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.testTag("duplicate_color_warning")
-                    )
-                } else if (similarityWarning != null) {
-                    Text(
-                        text = "Warning: Color distance is close to existing Category: '$similarityWarning'. Choosing a more distinct shade is recommended for readability.",
-                        color = Color(0xFFD48A00),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.testTag("similarity_color_warning")
-                    )
-                }
-
-                // Smart Color Suggestions grid
-                Text(
-                    text = "Smart Recommended Colors (Theme Palette)",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    smartSuggestions.forEach { suggestion ->
-                        val isSelected = colorHex.uppercase() == suggestion.uppercase()
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(parseHexColor(suggestion))
-                                .border(
-                                    width = if (isSelected) 3.dp else 1.dp,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else Color.LightGray.copy(alpha = 0.5f),
-                                    shape = CircleShape
-                                )
-                                .clickable { colorHex = suggestion }
-                        )
-                    }
-                }
-
-                // Subcategories Creation Row
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                Text(
-                    text = "Manage Subcategories",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Simple mini subcategory adder
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = newSubcategoryName,
-                        onValueChange = { newSubcategoryName = it },
-                        label = { Text("Subcategory Name") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Button(
-                        onClick = {
-                            if (newSubcategoryName.isNotBlank()) {
-                                // Automatically allocate lighter shade factor based on index
-                                val shades = viewModel.getLighterShades(colorHex)
-                                val shadeOverride = if (subList.size < shades.size) shades[subList.size] else shades.last()
-                                subList.add(SubcategoryEditorItem(name = newSubcategoryName, colorHexOverride = shadeOverride))
-                                newSubcategoryName = ""
-                            }
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text("Add", fontSize = 11.sp)
-                    }
-                }
-
-                // Temporary list displays
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    subList.forEachIndexed { index, subitem ->
-                        val resolvedSubColor = subitem.colorHexOverride ?: colorHex
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.LightGray.copy(alpha = 0.15f))
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(parseHexColor(resolvedSubColor))
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(subitem.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                            }
-
-                            // Subcategory lighter shades customize pallet picker! Shows visual gradient
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                val shadesOfParent = viewModel.getLighterShades(colorHex)
-                                shadesOfParent.forEach { shade ->
-                                    val isSelectedValue = shade.uppercase() == resolvedSubColor.uppercase()
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(horizontal = 2.dp)
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .background(parseHexColor(shade))
-                                            .border(
-                                                width = if (isSelectedValue) 1.5.dp else 0.dp,
-                                                color = Color.Black,
-                                                shape = CircleShape
-                                            )
-                                            .clickable {
-                                                subList[index] = subitem.copy(colorHexOverride = shade)
-                                            }
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(6.dp))
-                                IconButton(
-                                    onClick = { subList.remove(subitem) },
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = Color.Red
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Interactive save control actions
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel")
-                    }
-                    Button(
-                        onClick = {
-                            if (name.isNotBlank() && colorHex.isNotBlank() && !isDuplicateError) {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val budgetValue = budgetStr.toDoubleOrNull() ?: 0.0
-                                onSave(name, colorHex, iconName, budgetValue, subList.toList(), categoryType)
-                            }
-                        },
-                        enabled = name.isNotBlank() && colorHex.isNotBlank() && !isDuplicateError,
-                        modifier = Modifier.testTag("save_category_submit_btn")
-                    ) {
-                        Text("Save")
-                    }
                 }
             }
         }
@@ -6291,7 +5882,7 @@ fun AddTransactionDialog(
                                     .padding(horizontal = 10.dp, vertical = 6.dp)
                             ) {
                                 Icon(
-                                    imageVector = getSubcategoryIcon(sub.name),
+                                    imageVector = subcategoryIconVector(sub, categories.find { it.id == selectedCatId }),
                                     contentDescription = sub.name,
                                     tint = if (isSelected) getContrastColor(subColorHex) else subColor,
                                     modifier = Modifier.size(14.dp)

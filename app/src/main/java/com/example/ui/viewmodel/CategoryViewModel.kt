@@ -440,6 +440,8 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                 jo.put("parentCategoryId", s.parentCategoryId)
                 jo.put("name", s.name)
                 jo.put("colorHexOverride", s.colorHexOverride ?: org.json.JSONObject.NULL)
+                jo.put("iconName", s.iconName ?: org.json.JSONObject.NULL)
+                jo.put("sortOrder", s.sortOrder)
                 subsArray.put(jo)
             }
             json.put("subcategories", subsArray)
@@ -534,11 +536,13 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                     val oldParentId = jo.getInt("parentCategoryId")
                     val name = jo.getString("name")
                     val colorHexOverride = if (jo.isNull("colorHexOverride")) null else jo.getString("colorHexOverride")
+                    val subIconName = if (jo.isNull("iconName")) null else jo.optString("iconName", null)
+                    val sortOrder = jo.optInt("sortOrder", i)
                     
                     val newParentId = catIdMapping[oldParentId]
                     if (newParentId != null) {
                         val newSubId = repository.insertSubcategory(
-                            Subcategory(parentCategoryId = newParentId, name = name, colorHexOverride = colorHexOverride)
+                            Subcategory(parentCategoryId = newParentId, name = name, colorHexOverride = colorHexOverride, iconName = subIconName, sortOrder = sortOrder)
                         ).toInt()
                         subIdMapping[oldSubId] = newSubId
                     }
@@ -728,7 +732,9 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
     }
 
     // CRUD Category APIs
-    fun addCategory(name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<String>, type: String = "EXPENSE") {
+    // Subcategories arrive with parentCategoryId unset; a null colorHexOverride gets the next lighter
+    // shade of the parent so seeded lists (onboarding) still fan out into a gradient.
+    fun addCategory(name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Subcategory>, type: String = "EXPENSE") {
         viewModelScope.launch {
             val id = repository.insertCategory(
                 Category(
@@ -740,22 +746,23 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                 )
             ).toInt()
 
-            // Automatically add subcategories
-            for ((index, subName) in subcategoriesList.withIndex()) {
-                val shades = getLighterShades(colorHex)
-                val subColor = if (index < shades.size) shades[index] else shades.last()
+            val shades = getLighterShades(colorHex)
+            subcategoriesList.forEachIndexed { index, sub ->
                 repository.insertSubcategory(
-                    Subcategory(
+                    sub.copy(
+                        id = 0,
                         parentCategoryId = id,
-                        name = subName,
-                        colorHexOverride = subColor
+                        colorHexOverride = sub.colorHexOverride ?: shades[index.coerceAtMost(shades.lastIndex)],
+                        sortOrder = index
                     )
                 )
             }
         }
     }
 
-    fun editCategory(id: Int, name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Pair<String, String?>>, type: String = "EXPENSE") {
+    // Subcategories are reconciled by id rather than rebuilt, so transactions keep pointing at the
+    // same rows after a rename, icon change or reorder.
+    fun editCategory(id: Int, name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Subcategory>, type: String = "EXPENSE") {
         viewModelScope.launch {
             repository.updateCategory(
                 Category(
@@ -768,25 +775,18 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                 )
             )
 
-            // Rebuild subcategories for this category
-            repository.deleteSubcategoryByParent(id)
-            for (sub in subcategoriesList) {
-                repository.insertSubcategory(
-                    Subcategory(
-                        parentCategoryId = id,
-                        name = sub.first,
-                        colorHexOverride = sub.second
-                    )
-                )
-            }
-        }
-    }
+            val existing = repository.getSubcategoriesForCategory(id).first()
+            val keptIds = subcategoriesList.map { it.id }.filter { it != 0 }.toSet()
+            existing.filter { it.id !in keptIds }.forEach { repository.deleteSubcategory(it) }
 
-    private suspend fun CategoryRepository.deleteSubcategoryByParent(parentId: Int) {
-        // Simple direct deletion
-        val currentSubs = getSubcategoriesForCategory(parentId).first()
-        for (sub in currentSubs) {
-            deleteSubcategory(sub)
+            subcategoriesList.forEachIndexed { index, sub ->
+                val row = sub.copy(parentCategoryId = id, sortOrder = index)
+                if (row.id != 0 && existing.any { it.id == row.id }) {
+                    repository.updateSubcategory(row)
+                } else {
+                    repository.insertSubcategory(row.copy(id = 0))
+                }
+            }
         }
     }
 

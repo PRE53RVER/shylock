@@ -49,10 +49,10 @@ interface CategoryDao {
 
 @Dao
 interface SubcategoryDao {
-    @Query("SELECT * FROM subcategories ORDER BY name ASC")
+    @Query("SELECT * FROM subcategories ORDER BY parentCategoryId ASC, sortOrder ASC, id ASC")
     fun getAllSubcategories(): Flow<List<Subcategory>>
 
-    @Query("SELECT * FROM subcategories WHERE parentCategoryId = :parentId ORDER BY name ASC")
+    @Query("SELECT * FROM subcategories WHERE parentCategoryId = :parentId ORDER BY sortOrder ASC, id ASC")
     fun getSubcategoriesForCategory(parentId: Int): Flow<List<Subcategory>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -247,9 +247,26 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE subcategories ADD COLUMN iconName TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE subcategories ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+        // Keep the order users are used to (alphabetical) until they reorder in the editor
+        db.execSQL(
+            """
+            UPDATE subcategories SET sortOrder = (
+                SELECT COUNT(*) FROM subcategories AS s
+                WHERE s.parentCategoryId = subcategories.parentCategoryId
+                  AND (s.name < subcategories.name OR (s.name = subcategories.name AND s.id < subcategories.id))
+            )
+            """.trimIndent()
+        )
+    }
+}
+
 @Database(
     entities = [Category::class, Subcategory::class, Transaction::class, LendingContact::class, LendingEntry::class, DetectedPayment::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -270,7 +287,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "color_manager_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
                 INSTANCE = instance
                 instance
