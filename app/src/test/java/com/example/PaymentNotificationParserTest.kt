@@ -103,6 +103,39 @@ class PaymentNotificationParserTest {
     }
 
     @Test
+    fun hdfcCardAlertWithoutVerbIsDraftedAsExpense() {
+        val parsed = PaymentNotificationParser.parse(
+            sms, "BP-HDFCBK-S",
+            "Txn Rs.40.00\nOn HDFC Bank Card 0559\nAt paytmqr6svem1@ptys\nby UPI 130079862560\nOn 22-09\n" +
+                "Not You?\nCall 18002586161/SMS BLOCK CC 0559 to 7308080808"
+        )
+        assertNotNull(parsed)
+        assertEquals(40.0, parsed!!.amount, 0.001)
+        assertEquals(DetectedPayment.DIRECTION_SENT, parsed.direction)
+        assertEquals("paytmqr6svem1", parsed.counterparty)
+    }
+
+    @Test
+    fun creditCardSpendWithAvailableLimitIsAnExpense() {
+        val parsed = PaymentNotificationParser.parse(
+            sms, "AD-HDFCBK-S",
+            "Txn Rs.4000 On HDFC Bank Credit Card 0559 At AMAZON On 22-09. Avl Limit: Rs.1,20,000"
+        )
+        assertNotNull(parsed)
+        assertEquals(4000.0, parsed!!.amount, 0.001)
+        assertEquals(DetectedPayment.DIRECTION_SENT, parsed.direction)
+    }
+
+    @Test
+    fun amountsWithoutGroupingAreNotTruncated() {
+        assertEquals(4000.0, PaymentNotificationParser.extractAmount("Rs.4000 spent")!!, 0.001)
+        assertEquals(4000.0, PaymentNotificationParser.extractAmount("INR 4000.00 debited")!!, 0.001)
+        assertEquals(12345.5, PaymentNotificationParser.extractAmount("₹12345.50 paid")!!, 0.001)
+        assertEquals(100000.0, PaymentNotificationParser.extractAmount("Rs 1,00,000 credited")!!, 0.001)
+        assertEquals(500.0, PaymentNotificationParser.extractAmount("Rs.500.Avl bal Rs 20")!!, 0.001)
+    }
+
+    @Test
     fun detectedPaymentMapsDirectionToLedgerType() {
         val sent = DetectedPayment(amount = 1.0, direction = DetectedPayment.DIRECTION_SENT, source = "GPay", sourcePackage = gpay, rawText = "", fingerprint = "a")
         val received = sent.copy(direction = DetectedPayment.DIRECTION_RECEIVED, fingerprint = "b")
