@@ -72,9 +72,10 @@ object PaymentNotificationParser {
 
     fun sourceLabel(packageName: String): String = SUPPORTED_SOURCES[packageName] ?: packageName
 
-    // Amount: ₹500 / Rs. 1,250.50 / INR 2000 / Rs500
+    // Amount: ₹500 / Rs. 1,250.50 / INR 2000 / Rs500 / Rs.1,00,000. The digit run is greedy so
+    // "Rs.4000" can never stop early at "400"; the word boundary keeps "hours 5" from reading as "rs 5".
     private val AMOUNT_REGEX = Regex(
-        """(?:₹|rs\.?|inr)\s*([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""",
+        """(?:₹|\brs\.?|\binr)\s*([0-9]+(?:,[0-9]+)*(?:\.[0-9]{1,2})?)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -83,8 +84,17 @@ object PaymentNotificationParser {
         "you paid", "paid to", "sent to", "debit"
     )
     private val RECEIVED_KEYWORDS = listOf(
-        "credited", "received", "deposited", "added to", "refund", "cashback", "credit", "transferred from"
+        "credited", "received", "deposited", "added to", "refund", "cashback", "credit", "transferred from",
+        "reversed", "reversal"
     )
+
+    // Card alerts name the instrument ("Credit Card", "Avl Limit"); neither says which way money moved
+    private val CARD_NAME_REGEX = Regex("""\b(?:credit|debit)\s+card\b""")
+    private val AVAILABLE_LIMIT_REGEX = Regex("""\b(?:avl|avbl|available)\.?\s*(?:credit\s+)?(?:limit|lmt)\b""")
+
+    // HDFC-style card alerts carry no verb: "Txn Rs.40.00 On HDFC Bank Card 0559 At merchant".
+    // A card transaction with no refund / credit wording is a spend.
+    private val CARD_TXN_REGEX = Regex("""\b(?:txn|transaction)\b.*\bcard\b|\bcard\b.*\b(?:txn|transaction)\b""")
 
     // "OTP", "will be debited", "due" etc. describe money that has not moved
     private val NOT_A_PAYMENT = listOf(
@@ -99,7 +109,7 @@ object PaymentNotificationParser {
     )
 
     // Tokens that end a name capture: connective words, brackets, punctuation, end of text
-    private const val NAME_END = """(?=\s+(?:on|via|using|for|from|to|ref|upi|is|has|was|-)\b|\s*[(.,;!]|\s*$)"""
+    private const val NAME_END = """(?=\s+(?:on|via|using|by|for|from|to|ref|upi|is|has|was|-)\b|\s*[(.,;!]|\s*$)"""
     private const val NAME_CHARS = """([A-Za-z0-9][A-Za-z0-9 .&'@_-]{1,40}?)"""
 
     // Counterparty patterns, tried in order. Group 1 is the name.
@@ -123,7 +133,7 @@ object PaymentNotificationParser {
     fun parse(packageName: String, title: String?, text: String?): ParsedPayment? {
         val combined = listOfNotNull(title, text).joinToString(" ").replace('\n', ' ').trim()
         if (combined.isBlank()) return null
-        val lower = combined.lowercase(Locale.ROOT)
+        val lower = combined.lowercase(Locale.ROOT).replace(AVAILABLE_LIMIT_REGEX, " ")
 
         if (NOT_A_PAYMENT.any { lower.contains(it) }) return null
         if (packageName in SMS_PACKAGES && !looksLikeBankAlert(lower)) return null
@@ -144,10 +154,12 @@ object PaymentNotificationParser {
     fun looksLikeBankAlert(lowerText: String): Boolean = BANK_HINTS.any { lowerText.contains(it) }
 
     fun detectDirection(lowerText: String): String? {
-        val sentIdx = SENT_KEYWORDS.mapNotNull { k -> lowerText.indexOf(k).takeIf { it >= 0 } }.minOrNull()
-        val recvIdx = RECEIVED_KEYWORDS.mapNotNull { k -> lowerText.indexOf(k).takeIf { it >= 0 } }.minOrNull()
+        val text = lowerText.replace(CARD_NAME_REGEX, "card").replace(AVAILABLE_LIMIT_REGEX, " ")
+        val sentIdx = SENT_KEYWORDS.mapNotNull { k -> text.indexOf(k).takeIf { it >= 0 } }.minOrNull()
+        val recvIdx = RECEIVED_KEYWORDS.mapNotNull { k -> text.indexOf(k).takeIf { it >= 0 } }.minOrNull()
         return when {
-            sentIdx == null && recvIdx == null -> null
+            sentIdx == null && recvIdx == null ->
+                if (CARD_TXN_REGEX.containsMatchIn(text)) DetectedPayment.DIRECTION_SENT else null
             recvIdx == null -> DetectedPayment.DIRECTION_SENT
             sentIdx == null -> DetectedPayment.DIRECTION_RECEIVED
             // Both present (e.g. "debited ... credited to beneficiary"): whichever comes first wins
