@@ -153,6 +153,14 @@ object PaymentNotificationParser {
 
     fun looksLikeBankAlert(lowerText: String): Boolean = BANK_HINTS.any { lowerText.contains(it) }
 
+    private val REFUND_KEYWORDS = listOf("refund", "cashback", "reversed", "reversal")
+
+    /** Money coming back for an earlier purchase, which should reduce spending rather than add income. */
+    fun looksLikeRefund(text: String): Boolean {
+        val lower = text.lowercase(Locale.ROOT)
+        return REFUND_KEYWORDS.any { lower.contains(it) }
+    }
+
     fun detectDirection(lowerText: String): String? {
         val text = lowerText.replace(CARD_NAME_REGEX, "card").replace(AVAILABLE_LIMIT_REGEX, " ")
         val sentIdx = SENT_KEYWORDS.mapNotNull { k -> text.indexOf(k).takeIf { it >= 0 } }.minOrNull()

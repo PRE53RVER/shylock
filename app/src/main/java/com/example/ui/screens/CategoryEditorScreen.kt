@@ -53,6 +53,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -93,6 +94,9 @@ import com.example.FEATURED_ICON_NAMES
 import com.example.canonicalIconName
 import com.example.data.model.Category
 import com.example.data.model.Subcategory
+import com.example.data.model.CategoryRole
+import com.example.data.model.isLending
+import com.example.data.model.isSystem
 import com.example.findCategoryIcon
 import com.example.getContrastColor
 import com.example.getContrastColorFor
@@ -152,7 +156,7 @@ fun CategoryEditorDialog(
     subcategories: List<Subcategory> = emptyList(),
     onDismiss: () -> Unit,
     onDelete: (() -> Unit)? = null,
-    onSave: (name: String, colorHex: String, iconName: String, budget: Double, subcategories: List<Subcategory>, type: String) -> Unit
+    onSave: (name: String, colorHex: String, iconName: String, budget: Double, subcategories: List<Subcategory>, type: String, role: String) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     val isEditing = category != null
@@ -164,6 +168,7 @@ fun CategoryEditorDialog(
         mutableStateOf(category?.budgetLimit?.takeIf { it > 0.0 }?.toInt()?.toString() ?: "")
     }
     var categoryType by remember { mutableStateOf(category?.type ?: initialType) }
+    var categoryRole by remember { mutableStateOf(category?.role ?: CategoryRole.STANDARD) }
     var showCustomHex by remember { mutableStateOf(false) }
 
     var showIconPicker by remember { mutableStateOf(false) }
@@ -213,7 +218,7 @@ fun CategoryEditorDialog(
     val accent = MaterialTheme.colorScheme.primary
     val swatch = parseHexColor(colorHex, accent)
     val canSave = name.isNotBlank() && colorHex.isNotBlank() && !isDuplicateError
-    val canDelete = category != null && onDelete != null && category.name != "Lending" && category.name != "Loan Repayment"
+    val canDelete = category != null && onDelete != null && !category.isSystem
 
     BackHandler(onBack = onDismiss)
 
@@ -357,6 +362,39 @@ fun CategoryEditorDialog(
                     HelperText("Set a monthly budget to track your spending")
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(14.dp))
+                }
+
+                // Lending categories belong to the ledger and are always kept out of totals
+                if (category?.isLending != true) {
+                    Spacer(Modifier.height(4.dp))
+                    val excluded = categoryRole == CategoryRole.TRANSFER
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(FieldShape)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            .clickable(enabled = category?.isSystem != true) {
+                                categoryRole = if (excluded) CategoryRole.STANDARD else CategoryRole.TRANSFER
+                            }
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .testTag("cat_exclude_totals_toggle"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Don't count in totals", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text(
+                                "For moving money between your own accounts, savings or investments",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Switch(
+                            checked = excluded,
+                            enabled = category?.isSystem != true,
+                            onCheckedChange = { categoryRole = if (it) CategoryRole.TRANSFER else CategoryRole.STANDARD }
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(4.dp))
@@ -561,7 +599,8 @@ fun CategoryEditorDialog(
                                 iconName,
                                 budgetValue,
                                 subList.map { it.toEntity(category?.id ?: 0) },
-                                categoryType
+                                categoryType,
+                                categoryRole
                             )
                         }
                         .testTag("save_category_submit_btn"),

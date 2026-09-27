@@ -92,6 +92,7 @@ import androidx.compose.ui.zIndex
 import com.example.data.model.Category
 import com.example.data.model.Subcategory
 import com.example.data.model.displayName
+import com.example.data.model.isSystem
 import com.example.formatInRupee
 import com.example.getContrastColorFor
 import com.example.getIconVector
@@ -114,8 +115,6 @@ enum class CategorySort(val label: String) {
 
 private val CardShape = RoundedCornerShape(22.dp)
 private val FieldShape = RoundedCornerShape(16.dp)
-private const val SYSTEM_LENDING = "Lending"
-private const val SYSTEM_LOAN = "Loan Repayment"
 
 private fun categoryKey(id: Int) = "cat-$id"
 
@@ -901,7 +900,7 @@ private fun ManageCategoryCard(
     val isOver = hasBudget && spent > budget
     val ratio = if (hasBudget) (spent / budget).toFloat() else shareOfTotal
     val catColor = parseHexColor(category.colorHex)
-    val isSystem = category.name == SYSTEM_LENDING || category.name == SYSTEM_LOAN
+    val isSystem = category.isSystem
     val subLabel = when (subcategories.size) {
         0 -> "0 subcategories"
         1 -> "1 subcategory"

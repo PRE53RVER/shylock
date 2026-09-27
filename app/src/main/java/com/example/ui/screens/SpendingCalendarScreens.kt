@@ -63,9 +63,14 @@ import androidx.compose.ui.unit.sp
 import com.example.AutoShrinkText
 import com.example.GlassSegmentedControl
 import com.example.data.model.Category
+import com.example.data.model.FlowKind
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
+import com.example.data.model.TxType
 import com.example.data.model.displayName
+import com.example.data.model.flowKind
+import com.example.data.model.isInflow
+import com.example.data.model.summarizeFlow
 import com.example.formatInRupee
 import com.example.getContrastColorFor
 import com.example.getIconVector
@@ -114,34 +119,56 @@ data class DayCategorySlice(
 fun Transaction.localDate(zone: ZoneId = ZoneId.systemDefault()): LocalDate =
     Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate()
 
-/** Income, spending and record count for every day that has at least one transaction. */
+/** Calendar side for lending and transfers: shown on the day, but outside income and spending. */
+const val CALENDAR_SIDE_OTHER = "OTHER"
+
+/**
+ * Which calendar side ("EXPENSE", "INCOME" or [CALENDAR_SIDE_OTHER]) a transaction falls on.
+ * Refunds sit with spending, where they count negative.
+ */
+fun Transaction.calendarSide(category: Category?): String = when (flowKind(category)) {
+    FlowKind.SPEND, FlowKind.REFUND -> TxType.EXPENSE
+    FlowKind.INCOME -> TxType.INCOME
+    else -> CALENDAR_SIDE_OTHER
+}
+
+/** A transaction's contribution to its calendar side: negative for a refund. */
+fun Transaction.calendarAmount(category: Category?): Double =
+    if (flowKind(category) == FlowKind.REFUND) -amount else amount
+
+/**
+ * Income, real spending and record count for every day that has at least one transaction.
+ * Lending and transfers are counted as records but not as income or spending.
+ */
 fun dailyTotals(
     transactions: List<Transaction>,
-    zone: ZoneId = ZoneId.systemDefault()
+    zone: ZoneId = ZoneId.systemDefault(),
+    categoriesById: Map<Int, Category> = emptyMap()
 ): Map<LocalDate, DayTotals> =
     transactions
         .groupBy { it.localDate(zone) }
         .mapValues { (_, dayTx) ->
+            val flow = summarizeFlow(dayTx, categoriesById)
             DayTotals(
-                income = dayTx.filter { it.type == "INCOME" }.sumOf { it.amount },
-                expense = dayTx.filter { it.type == "EXPENSE" }.sumOf { it.amount },
+                income = flow.income,
+                expense = flow.realSpend,
                 count = dayTx.size
             )
         }
 
-/** [type] transactions of a single day grouped by category, largest first. */
+/** A day's transactions on one calendar [type] side grouped by category, largest first. */
 fun dayCategoryBreakdown(
     dayTransactions: List<Transaction>,
     categories: List<Category>,
     type: String
 ): List<DayCategorySlice> {
-    val typed = dayTransactions.filter { it.type == type }
-    val total = typed.sumOf { it.amount }
     val byId = categories.associateBy { it.id }
+    val typed = dayTransactions.filter { it.calendarSide(byId[it.categoryId]) == type }
+    val total = typed.sumOf { it.calendarAmount(byId[it.categoryId]) }.coerceAtLeast(0.0)
     return typed
         .groupBy { it.categoryId }
         .map { (categoryId, txs) ->
-            val amount = txs.sumOf { it.amount }
+            val amount = txs.sumOf { it.calendarAmount(byId[categoryId]) }.coerceAtLeast(0.0)
             DayCategorySlice(
                 categoryId = categoryId,
                 category = byId[categoryId],
@@ -204,7 +231,9 @@ fun SpendingCalendarScreen(
 ) {
     val today = remember { LocalDate.now() }
     val firstDayOfWeek = remember { WeekFields.of(Locale.getDefault()).firstDayOfWeek }
-    val totals = remember(transactions) { dailyTotals(transactions) }
+    val totals = remember(transactions, categories) {
+        dailyTotals(transactions, categoriesById = categories.associateBy { it.id })
+    }
 
     var view by rememberSaveable { mutableStateOf(CalendarView.MONTH) }
     // Saved as an epoch day so it survives the trip into a day's breakdown and back
@@ -578,8 +607,9 @@ private fun SelectedDayCard(
     onOpen: () -> Unit
 ) {
     val dayTx = remember(transactions, date) { transactions.filter { it.localDate() == date } }
-    val income = dayTx.filter { it.type == "INCOME" }.sumOf { it.amount }
-    val spend = dayTx.filter { it.type == "EXPENSE" }.sumOf { it.amount }
+    val dayFlow = remember(dayTx, categories) { summarizeFlow(dayTx, categories.associateBy { it.id }) }
+    val income = dayFlow.income
+    val spend = dayFlow.realSpend
     val top = remember(dayTx, categories) { dayCategoryBreakdown(dayTx, categories, "EXPENSE").take(3) }
     val hasActivity = dayTx.isNotEmpty()
 
@@ -956,6 +986,7 @@ fun CalendarDayDetailScreen(
     val dayTx = remember(transactions, date) { transactions.filter { it.localDate() == date } }
     val spending = remember(dayTx, categories) { dayCategoryBreakdown(dayTx, categories, "EXPENSE") }
     val income = remember(dayTx, categories) { dayCategoryBreakdown(dayTx, categories, "INCOME") }
+    val notCounted = remember(dayTx, categories) { dayCategoryBreakdown(dayTx, categories, CALENDAR_SIDE_OTHER) }
 
     Column(
         modifier = modifier
@@ -1004,6 +1035,15 @@ fun CalendarDayDetailScreen(
                 currencySymbol = currencySymbol,
                 onClick = { onOpenCategory("INCOME", it.categoryId) },
                 modifier = Modifier.testTag("calendar_day_income_list")
+            )
+        }
+        if (notCounted.isNotEmpty()) {
+            SectionTitle("Lending & Transfers (not counted)")
+            CategorySliceList(
+                slices = notCounted,
+                currencySymbol = currencySymbol,
+                onClick = { onOpenCategory(CALENDAR_SIDE_OTHER, it.categoryId) },
+                modifier = Modifier.testTag("calendar_day_other_list")
             )
         }
     }
@@ -1100,16 +1140,17 @@ fun CalendarCategoryTransactionsScreen(
     val isIncome = type == "INCOME"
     var sortByAmount by rememberSaveable { mutableStateOf(false) }
 
-    val dayTyped = remember(transactions, date, type) {
-        transactions.filter { it.type == type && it.localDate() == date }
+    val categoriesById = remember(categories) { categories.associateBy { it.id } }
+    val dayTyped = remember(transactions, date, type, categoriesById) {
+        transactions.filter { it.localDate() == date && it.calendarSide(categoriesById[it.categoryId]) == type }
     }
     val categoryTx = remember(dayTyped, categoryId, sortByAmount) {
         dayTyped
             .filter { it.categoryId == categoryId }
             .let { list -> if (sortByAmount) list.sortedByDescending { it.amount } else list.sortedBy { it.timestamp } }
     }
-    val categoryTotal = categoryTx.sumOf { it.amount }
-    val dayTotal = dayTyped.sumOf { it.amount }
+    val categoryTotal = categoryTx.sumOf { it.calendarAmount(category) }.coerceAtLeast(0.0)
+    val dayTotal = dayTyped.sumOf { it.calendarAmount(categoriesById[it.categoryId]) }.coerceAtLeast(0.0)
     val share = if (dayTotal > 0.0) categoryTotal / dayTotal * 100.0 else 0.0
     val timeFormatter = remember { DateTimeFormatter.ofPattern("hh:mm a", Locale.getDefault()) }
 
@@ -1161,7 +1202,7 @@ fun CalendarCategoryTransactionsScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        text = "${String.format(Locale.US, "%.0f", share)}% of the day's ${if (isIncome) "income" else "spending"}",
+                        text = "${String.format(Locale.US, "%.0f", share)}% of the day's ${when (type) { "INCOME" -> "income"; CALENDAR_SIDE_OTHER -> "lending & transfers"; else -> "spending" }}",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1250,10 +1291,10 @@ fun CalendarCategoryTransactionsScreen(
                     Spacer(Modifier.width(8.dp))
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = (if (isIncome) "+ " else "- ") + formatInRupee(tx.amount, currencySymbol),
+                            text = (if (tx.isInflow) "+ " else "- ") + formatInRupee(tx.amount, currencySymbol),
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Black,
-                            color = if (isIncome) IncomeGreen else ExpenseRed,
+                            color = if (tx.isInflow) IncomeGreen else ExpenseRed,
                             maxLines = 1
                         )
                         Text(

@@ -4,6 +4,8 @@ import com.example.data.db.CategoryDao
 import com.example.data.db.SubcategoryDao
 import com.example.data.db.TransactionDao
 import com.example.data.model.Category
+import com.example.data.model.CategoryRole
+import com.example.data.model.SystemCategories
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
 import kotlinx.coroutines.flow.Flow
@@ -48,43 +50,42 @@ class CategoryRepository(
         }
     }
 
+    /**
+     * Makes sure the built-in categories exist with the right side and role, and returns the
+     * lending pair (Lending, Loan Repayment) the ledger files its transactions under.
+     */
     suspend fun ensureSystemCategories(): Pair<Category, Category> {
         val categories = categoryDao.getAllCategories().first()
-        var lending = categories.find { it.name == "Lending" }
-        if (lending == null) {
-            val id = categoryDao.insertCategory(
-                Category(
-                    name = "Lending",
-                    colorHex = "#00B4D8",
-                    iconName = "payments",
-                    budgetLimit = 0.0,
-                    type = "EXPENSE"
-                )
-            ).toInt()
-            lending = categoryDao.getCategoryById(id)!!
-        } else if (lending.type != "EXPENSE") {
-            lending = lending.copy(type = "EXPENSE")
-            categoryDao.updateCategory(lending)
-        }
-
-        var repayment = categories.find { it.name == "Loan Repayment" }
-        if (repayment == null) {
-            val id = categoryDao.insertCategory(
-                Category(
-                    name = "Loan Repayment",
-                    colorHex = "#00C9A7",
-                    iconName = "trending_up",
-                    budgetLimit = 0.0,
-                    type = "INCOME"
-                )
-            ).toInt()
-            repayment = categoryDao.getCategoryById(id)!!
-        } else if (repayment.type != "INCOME") {
-            repayment = repayment.copy(type = "INCOME")
-            categoryDao.updateCategory(repayment)
-        }
-
+        val lending = ensureSystemCategory(categories, SystemCategories.LENDING, "#00B4D8", "payments", "EXPENSE", CategoryRole.LENDING)
+        val repayment = ensureSystemCategory(categories, SystemCategories.LOAN_REPAYMENT, "#00C9A7", "trending_up", "INCOME", CategoryRole.LENDING)
+        ensureSystemCategory(categories, SystemCategories.TRANSFER_OUT, "#78909C", "swap_horiz", "EXPENSE", CategoryRole.TRANSFER)
+        ensureSystemCategory(categories, SystemCategories.TRANSFER_IN, "#90A4AE", "swap_horiz", "INCOME", CategoryRole.TRANSFER)
         return Pair(lending, repayment)
+    }
+
+    private suspend fun ensureSystemCategory(
+        existing: List<Category>,
+        name: String,
+        colorHex: String,
+        iconName: String,
+        type: String,
+        role: String
+    ): Category {
+        val found = existing.find { it.name == name }
+            ?: return categoryDao.getCategoryById(
+                categoryDao.insertCategory(
+                    Category(name = name, colorHex = colorHex, iconName = iconName, budgetLimit = 0.0, type = type, role = role)
+                ).toInt()
+            )!!
+        if (found.type == type && found.role == role) return found
+        val fixed = found.copy(type = type, role = role)
+        categoryDao.updateCategory(fixed)
+        return fixed
+    }
+
+    suspend fun findSystemCategory(name: String): Category? {
+        ensureSystemCategories()
+        return categoryDao.getCategoryByName(name)
     }
 
     suspend fun insertCategory(category: Category): Long {

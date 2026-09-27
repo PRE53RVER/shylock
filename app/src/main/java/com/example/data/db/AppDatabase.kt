@@ -264,9 +264,17 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE categories ADD COLUMN role TEXT NOT NULL DEFAULT 'STANDARD'")
+        // The lending ledger's system pair is money moving around, not spending or income
+        db.execSQL("UPDATE categories SET role = 'LENDING' WHERE name IN ('Lending', 'Loan Repayment')")
+    }
+}
+
 @Database(
     entities = [Category::class, Subcategory::class, Transaction::class, LendingContact::class, LendingEntry::class, DetectedPayment::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -287,7 +295,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "color_manager_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
                 INSTANCE = instance
                 instance
