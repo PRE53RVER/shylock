@@ -310,10 +310,7 @@ fun SpendingCalendarScreen(
                             selectedDate = selectedDate,
                             totals = totals,
                             currencySymbol = currencySymbol,
-                            onDayClick = { date ->
-                                selectDate(date)
-                                if ((totals[date]?.count ?: 0) > 0) onOpenDay(date)
-                            }
+                            onDayClick = selectDate
                         )
                         SelectedDayCard(
                             date = selectedDate,
@@ -326,17 +323,26 @@ fun SpendingCalendarScreen(
                             onOpen = { onOpenDay(selectedDate) }
                         )
                     }
-                    CalendarView.WEEK -> WeekList(
-                        days = weekDays,
-                        today = today,
-                        selectedDate = selectedDate,
-                        totals = totals,
-                        currencySymbol = currencySymbol,
-                        onDayClick = { date ->
-                            selectDate(date)
-                            if ((totals[date]?.count ?: 0) > 0) onOpenDay(date)
-                        }
-                    )
+                    CalendarView.WEEK -> {
+                        WeekList(
+                            days = weekDays,
+                            today = today,
+                            selectedDate = selectedDate,
+                            totals = totals,
+                            currencySymbol = currencySymbol,
+                            onDayClick = selectDate
+                        )
+                        SelectedDayCard(
+                            date = selectedDate,
+                            today = today,
+                            transactions = transactions,
+                            categories = categories,
+                            currencySymbol = currencySymbol,
+                            onPrevDay = { selectDate(selectedDate.minusDays(1)) },
+                            onNextDay = { selectDate(selectedDate.plusDays(1)) },
+                            onOpen = { onOpenDay(selectedDate) }
+                        )
+                    }
                     CalendarView.LIST -> MonthDayList(
                         month = month,
                         today = today,
@@ -751,6 +757,7 @@ private fun WeekList(
                 barPeak = peak,
                 currencySymbol = currencySymbol,
                 enabled = !date.isAfter(today),
+                showChevron = false,
                 onClick = { onDayClick(date) }
             )
         }
@@ -811,7 +818,8 @@ private fun DaySummaryRow(
     barPeak: Double,
     currencySymbol: String,
     enabled: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    showChevron: Boolean = true
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val badgeShape = RoundedCornerShape(12.dp)
@@ -904,7 +912,7 @@ private fun DaySummaryRow(
         Icon(
             imageVector = Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = if (count > 0) MaterialTheme.colorScheme.outline else Color.Transparent,
+            tint = if (showChevron && count > 0) MaterialTheme.colorScheme.outline else Color.Transparent,
             modifier = Modifier.size(18.dp)
         )
     }
