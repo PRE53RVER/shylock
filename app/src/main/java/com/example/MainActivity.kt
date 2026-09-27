@@ -76,6 +76,8 @@ import com.example.data.model.DetectedPayment
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
 import com.example.data.model.displayName
+import com.example.ui.screens.CalendarCategoryTransactionsScreen
+import com.example.ui.screens.CalendarDayDetailScreen
 import com.example.ui.screens.CategoryEditorDialog
 import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.LendingListScreen
@@ -87,6 +89,7 @@ import com.example.inbox.MoneyInboxNotifications
 import com.example.inbox.MoneyInboxSettings
 import com.example.ui.screens.OnboardingWizard
 import com.example.ui.screens.ShylockCurrencies
+import com.example.ui.screens.SpendingCalendarScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.AppTheme
@@ -509,6 +512,8 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
 
     val isLendingScreen = currentRoute == "lending" || (currentRoute?.startsWith("lending_contact") == true)
     val isOnboardingScreen = currentRoute == "onboarding" || currentRoute == "onboarding_tour"
+    // Calendar drill-down (month -> day -> category) is full screen with its own back button
+    val isCalendarScreen = currentRoute.startsWith("calendar")
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -518,7 +523,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             // Home, Insights and Settings host their own headers inside the scroll body so they can
             // scroll away and hand the whole viewport back to content; the other tabs keep a
             // lightweight title.
-            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "inbox" && currentRoute != "insights" && currentRoute != "settings" && currentRoute != "categories" && !isLendingScreen) {
+            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "inbox" && currentRoute != "insights" && currentRoute != "settings" && currentRoute != "categories" && !isLendingScreen && !isCalendarScreen) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
@@ -603,7 +608,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             }
         },
         bottomBar = {
-            if (!isOnboardingScreen && !isLendingScreen) {
+            if (!isOnboardingScreen && !isLendingScreen && !isCalendarScreen) {
                 val navShape = RoundedCornerShape(26.dp)
                 Box(
                     modifier = Modifier
@@ -1304,7 +1309,8 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     totalSpend = totalPeriodSpend,
                     lastPeriodSpend = lastPeriodSpend,
                     currencySymbol = currencySymbol,
-                    sparkline = periodSparkline
+                    sparkline = periodSparkline,
+                    onCalendarClick = { navController.navigate("calendar") }
                 )
 
                 // Time Period Selector
@@ -2091,6 +2097,49 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     },
                     onEditCategory = { editCategoryTarget = it },
                     onDeleteCategory = { categoryToDelete = it }
+                )
+            }
+
+            // === Spending calendar: month grid -> one day by category -> one category's records ===
+            composable("calendar") {
+                SpendingCalendarScreen(
+                    transactions = transactions,
+                    categories = categories,
+                    month = selectedMonth,
+                    currencySymbol = currencySymbol,
+                    onMonthChange = { viewModel.selectMonth(it) },
+                    onPickMonth = { showMonthPickerSheet = true },
+                    onBack = { navController.popBackStack() },
+                    onOpenDay = { date -> navController.navigate("calendar_day/${date.toEpochDay()}") }
+                )
+            }
+
+            composable("calendar_day/{epochDay}") { backStackEntry ->
+                val epochDay = backStackEntry.arguments?.getString("epochDay")?.toLongOrNull() ?: LocalDate.now().toEpochDay()
+                CalendarDayDetailScreen(
+                    date = LocalDate.ofEpochDay(epochDay),
+                    transactions = transactions,
+                    categories = categories,
+                    currencySymbol = currencySymbol,
+                    onBack = { navController.popBackStack() },
+                    onOpenCategory = { type, categoryId ->
+                        navController.navigate("calendar_day/$epochDay/$type/$categoryId")
+                    }
+                )
+            }
+
+            composable("calendar_day/{epochDay}/{type}/{categoryId}") { backStackEntry ->
+                val args = backStackEntry.arguments
+                val epochDay = args?.getString("epochDay")?.toLongOrNull() ?: LocalDate.now().toEpochDay()
+                CalendarCategoryTransactionsScreen(
+                    date = LocalDate.ofEpochDay(epochDay),
+                    type = args?.getString("type") ?: "EXPENSE",
+                    categoryId = args?.getString("categoryId")?.toIntOrNull() ?: 0,
+                    transactions = transactions,
+                    categories = categories,
+                    subcategories = subcategories,
+                    currencySymbol = currencySymbol,
+                    onBack = { navController.popBackStack() }
                 )
             }
 
@@ -3284,7 +3333,8 @@ fun InsightsSummaryCard(
     lastPeriodSpend: Double,
     currencySymbol: String,
     sparkline: List<Double>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onCalendarClick: (() -> Unit)? = null
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
@@ -3411,12 +3461,33 @@ fun InsightsSummaryCard(
                 modifier = Modifier.width(132.dp),
                 horizontalAlignment = Alignment.End
             ) {
-                SpendRhythmBars(
-                    values = sparkline,
-                    modifier = Modifier
-                        .padding(end = 4.dp)
-                        .size(width = 78.dp, height = 52.dp)
-                )
+                Row(verticalAlignment = Alignment.Top) {
+                    SpendRhythmBars(
+                        values = sparkline,
+                        modifier = Modifier
+                            .padding(end = 4.dp)
+                            .size(width = if (onCalendarClick != null) 72.dp else 78.dp, height = 52.dp)
+                    )
+                    // Opens the spending calendar: daily totals, then category and record drill-down
+                    if (onCalendarClick != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .liquidGlass(shape = RoundedCornerShape(13.dp), strength = 0.9f, elevation = 4.dp)
+                                .clickable(onClick = onCalendarClick)
+                                .testTag("insights_calendar_btn"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarMonth,
+                                contentDescription = "Open spending calendar",
+                                tint = accent,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier
