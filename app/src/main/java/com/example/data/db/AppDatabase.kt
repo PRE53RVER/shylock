@@ -13,6 +13,7 @@ import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.Category
+import com.example.data.model.DetectedPayment
 import com.example.data.model.LendingContact
 import com.example.data.model.LendingEntry
 import com.example.data.model.Subcategory
@@ -48,10 +49,10 @@ interface CategoryDao {
 
 @Dao
 interface SubcategoryDao {
-    @Query("SELECT * FROM subcategories ORDER BY name ASC")
+    @Query("SELECT * FROM subcategories ORDER BY parentCategoryId ASC, sortOrder ASC, id ASC")
     fun getAllSubcategories(): Flow<List<Subcategory>>
 
-    @Query("SELECT * FROM subcategories WHERE parentCategoryId = :parentId ORDER BY name ASC")
+    @Query("SELECT * FROM subcategories WHERE parentCategoryId = :parentId ORDER BY sortOrder ASC, id ASC")
     fun getSubcategoriesForCategory(parentId: Int): Flow<List<Subcategory>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -142,6 +143,48 @@ interface LendingDao {
     suspend fun deleteEntryById(id: Int)
 }
 
+@Dao
+interface DetectedPaymentDao {
+    @Query("SELECT * FROM detected_payments WHERE status = 'PENDING' ORDER BY timestamp DESC")
+    fun getPendingPayments(): Flow<List<DetectedPayment>>
+
+    @Query("SELECT COUNT(*) FROM detected_payments WHERE status = 'PENDING'")
+    fun getPendingCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM detected_payments WHERE status = 'PENDING' AND timestamp >= :since")
+    suspend fun countPendingSince(since: Long): Int
+
+    @Query("SELECT * FROM detected_payments WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Int): DetectedPayment?
+
+    @Query("SELECT * FROM detected_payments WHERE fingerprint = :fingerprint LIMIT 1")
+    suspend fun getByFingerprint(fingerprint: String): DetectedPayment?
+
+    // Same amount + direction + counterparty from the same app inside a short window is the
+    // same payment re-posted (banks and UPI apps often both notify), regardless of wording
+    @Query(
+        """
+        SELECT COUNT(*) FROM detected_payments
+        WHERE amount = :amount AND direction = :direction
+          AND timestamp BETWEEN :from AND :to
+          AND ((:counterparty IS NULL AND counterparty IS NULL) OR counterparty = :counterparty)
+        """
+    )
+    suspend fun countSimilar(amount: Double, direction: String, counterparty: String?, from: Long, to: Long): Int
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(payment: DetectedPayment): Long
+
+    @Query("UPDATE detected_payments SET status = :status WHERE id = :id")
+    suspend fun updateStatus(id: Int, status: String)
+
+    @Query("DELETE FROM detected_payments WHERE status != 'PENDING' AND timestamp < :before")
+    suspend fun pruneResolvedBefore(before: Long)
+
+    @Query("DELETE FROM detected_payments")
+    suspend fun deleteAll()
+}
+
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE categories ADD COLUMN type TEXT NOT NULL DEFAULT 'EXPENSE'")
@@ -182,9 +225,48 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `detected_payments` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `amount` REAL NOT NULL,
+                `direction` TEXT NOT NULL,
+                `counterparty` TEXT,
+                `source` TEXT NOT NULL,
+                `sourcePackage` TEXT NOT NULL,
+                `rawText` TEXT NOT NULL,
+                `fingerprint` TEXT NOT NULL,
+                `timestamp` INTEGER NOT NULL,
+                `status` TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_detected_payments_fingerprint` ON `detected_payments` (`fingerprint`)")
+    }
+}
+
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE subcategories ADD COLUMN iconName TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE subcategories ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+        // Keep the order users are used to (alphabetical) until they reorder in the editor
+        db.execSQL(
+            """
+            UPDATE subcategories SET sortOrder = (
+                SELECT COUNT(*) FROM subcategories AS s
+                WHERE s.parentCategoryId = subcategories.parentCategoryId
+                  AND (s.name < subcategories.name OR (s.name = subcategories.name AND s.id < subcategories.id))
+            )
+            """.trimIndent()
+        )
+    }
+}
+
 @Database(
-    entities = [Category::class, Subcategory::class, Transaction::class, LendingContact::class, LendingEntry::class],
-    version = 4,
+    entities = [Category::class, Subcategory::class, Transaction::class, LendingContact::class, LendingEntry::class, DetectedPayment::class],
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -192,6 +274,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun subcategoryDao(): SubcategoryDao
     abstract fun transactionDao(): TransactionDao
     abstract fun lendingDao(): LendingDao
+    abstract fun detectedPaymentDao(): DetectedPaymentDao
 
     companion object {
         @Volatile
@@ -204,7 +287,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "color_manager_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
                 INSTANCE = instance
                 instance

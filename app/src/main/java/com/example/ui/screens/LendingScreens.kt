@@ -93,7 +93,7 @@ fun LendingSummaryCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(22.dp)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -104,7 +104,7 @@ fun LendingSummaryCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -114,7 +114,7 @@ fun LendingSummaryCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(50.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center
@@ -123,37 +123,38 @@ fun LendingSummaryCard(
                         imageVector = Icons.Default.Handshake,
                         contentDescription = "Lending Ledger",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Lending Ledger",
-                            style = MaterialTheme.typography.titleMedium,
+                            fontSize = 15.sp,
+                            lineHeight = 19.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "• $contactsCount ${if (contactsCount == 1) "contact" else "contacts"}",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = if (totalOutstanding >= 0.0) "Owed to you" else "You owe",
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelSmall,
+                        lineHeight = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = formatInRupee(kotlin.math.abs(totalOutstanding), currencySymbol),
-                        style = MaterialTheme.typography.titleLarge,
+                        fontSize = 20.sp,
+                        lineHeight = 24.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -164,7 +165,7 @@ fun LendingSummaryCard(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = "Open Lending Ledger",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(26.dp)
+                modifier = Modifier.size(24.dp)
             )
         }
     }
