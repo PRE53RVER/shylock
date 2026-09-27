@@ -8,15 +8,24 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
 import com.example.data.model.Category
+import com.example.data.model.CategoryRole
 import com.example.data.model.DetectedPayment
 import com.example.data.model.LendingContact
 import com.example.data.model.LendingEntry
 import com.example.data.model.Subcategory
+import com.example.data.model.RecordKind
+import com.example.data.model.suggestRecordKind
 import com.example.data.model.Transaction
+import com.example.data.model.TxType
+import com.example.data.model.categoryTotal
+import com.example.data.model.countsInTotals
+import com.example.data.model.isSystem
+import com.example.data.model.summarizeFlow
 import com.example.data.repository.CategoryRepository
 import com.example.data.repository.LendingRepository
 import com.example.data.repository.MoneyInboxRepository
 import com.example.inbox.MoneyInboxNotifications
+import com.example.inbox.PaymentNotificationParser
 import com.example.inbox.MoneyInboxSettings
 import com.example.ui.theme.AppTheme
 import kotlinx.coroutines.flow.Flow
@@ -226,29 +235,26 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
         targetMonth: YearMonth
     ): Map<Int, CategoryStats> {
         val targetPrevMonth = targetMonth.minusMonths(1)
+        val categoriesById = categoryList.associateBy { it.id }
 
-        val currentMonthExpenses = transactionList.filter { 
-            isTimestampInMonth(it.timestamp, targetMonth) && it.type == "EXPENSE" 
-        }
-        val currentMonthIncomes = transactionList.filter { 
-            isTimestampInMonth(it.timestamp, targetMonth) && it.type == "INCOME" 
-        }
-        val totalCurrentSpend = currentMonthExpenses.sumOf { it.amount }
-        val totalCurrentIncome = currentMonthIncomes.sumOf { it.amount }
+        val currentMonthTx = transactionList.filter { isTimestampInMonth(it.timestamp, targetMonth) }
+        val previousMonthTx = transactionList.filter { isTimestampInMonth(it.timestamp, targetPrevMonth) }
+        val currentByCategory = currentMonthTx.groupBy { it.categoryId }
+        val previousByCategory = previousMonthTx.groupBy { it.categoryId }
+        // Shares are of real spending / earning, so lending and transfers never dilute them
+        val flow = summarizeFlow(currentMonthTx, categoriesById)
 
         return categoryList.associate { category ->
             val isIncome = category.type == "INCOME"
-            val typeTxList = if (isIncome) currentMonthIncomes else currentMonthExpenses
-            val prevTypeTxList = transactionList.filter { 
-                isTimestampInMonth(it.timestamp, targetPrevMonth) && it.type == (if (isIncome) "INCOME" else "EXPENSE")
+            val totalForType = when {
+                !category.countsInTotals -> 0.0
+                isIncome -> flow.income
+                else -> flow.realSpend
             }
-            val totalForType = if (isIncome) totalCurrentIncome else totalCurrentSpend
 
-            val catCurrentTx = typeTxList.filter { it.categoryId == category.id }
-            val catPreviousTx = prevTypeTxList.filter { it.categoryId == category.id }
-
-            val currentSum = catCurrentTx.sumOf { it.amount }
-            val previousSum = catPreviousTx.sumOf { it.amount }
+            val catCurrentTx = currentByCategory[category.id].orEmpty()
+            val currentSum = categoryTotal(category, catCurrentTx)
+            val previousSum = categoryTotal(category, previousByCategory[category.id].orEmpty())
 
             val percentage = if (totalForType > 0.0) {
                 (currentSum / totalForType) * 100.0
@@ -368,11 +374,31 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
         _openInboxRequest.value = false
     }
 
+    /**
+     * What a detected payment most likely is (refund, loan, repayment...) and the lending contact
+     * it involves, used to preselect the record dialog's "What is this?" choice.
+     */
+    fun inboxSuggestion(payment: DetectedPayment): Pair<RecordKind, LendingContact?> =
+        suggestRecordKind(
+            sent = payment.isSent,
+            counterparty = payment.counterparty,
+            looksLikeRefund = PaymentNotificationParser.looksLikeRefund(payment.rawText),
+            contacts = lendingContacts.value
+        )
+
     /** Builds the prefilled draft the add-record dialog opens with for a detected payment. */
-    fun draftTransactionFor(payment: DetectedPayment): Transaction {
-        val type = payment.transactionType
+    fun draftTransactionFor(payment: DetectedPayment, kind: RecordKind = inboxSuggestion(payment).first): Transaction {
         val description = payment.counterparty ?: payment.source
-        val category = categories.value.firstOrNull { it.type.equals(type, ignoreCase = true) }
+        val candidates = categories.value.filter { kind.accepts(it) }
+        // A refund most likely goes back to wherever money was last spent with the same merchant
+        val category = if (kind == RecordKind.REFUND) {
+            val previous = transactions.value
+                .filter { it.type == TxType.EXPENSE && it.description.trim().equals(description.trim(), ignoreCase = true) }
+                .maxByOrNull { it.timestamp }
+            candidates.firstOrNull { it.id == previous?.categoryId } ?: candidates.firstOrNull()
+        } else {
+            candidates.firstOrNull()
+        }
         return Transaction(
             id = 0,
             categoryId = category?.id ?: 0,
@@ -380,8 +406,63 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
             amount = payment.amount,
             description = description,
             timestamp = payment.timestamp,
-            type = type
+            type = kind.transactionType(category)
         )
+    }
+
+    /** Files a detected payment in the lending ledger (which also creates its linked transaction). */
+    fun recordDetectedPaymentAsLending(
+        paymentId: Int,
+        contactId: Int?,
+        newContactName: String?,
+        amount: Double,
+        description: String,
+        timestamp: Long,
+        direction: String
+    ) {
+        viewModelScope.launch {
+            val resolvedId = resolveLendingContact(contactId, newContactName) ?: return@launch
+            insertLendingEntry(resolvedId, amount, direction, description, timestamp)
+            inboxRepository.markRecorded(paymentId)
+        }
+    }
+
+    /**
+     * Reclassifies an ordinary transaction as money lent or paid back: the plain row is replaced
+     * by a lending entry, whose own linked transaction keeps it out of spending and income.
+     */
+    fun convertTransactionToLending(
+        transaction: Transaction,
+        contactId: Int?,
+        newContactName: String?,
+        amount: Double,
+        description: String,
+        timestamp: Long,
+        direction: String
+    ) {
+        if (transaction.lendingEntryId != null) return
+        viewModelScope.launch {
+            val resolvedId = resolveLendingContact(contactId, newContactName) ?: return@launch
+            repository.deleteTransaction(transaction)
+            insertLendingEntry(resolvedId, amount, direction, description, timestamp)
+        }
+    }
+
+    /** Adds a Lent / Got back record from the record dialog, creating the contact when it is new. */
+    fun recordLending(contactId: Int?, newContactName: String?, amount: Double, description: String, timestamp: Long, direction: String) {
+        viewModelScope.launch {
+            val resolvedId = resolveLendingContact(contactId, newContactName) ?: return@launch
+            insertLendingEntry(resolvedId, amount, direction, description, timestamp)
+        }
+    }
+
+    /** An existing contact id, or a new contact created from [newName]; null when neither is usable. */
+    private suspend fun resolveLendingContact(contactId: Int?, newName: String?): Int? {
+        if (contactId != null) return contactId
+        val name = newName?.trim().orEmpty()
+        if (name.isEmpty()) return null
+        lendingContacts.value.firstOrNull { it.name.trim().equals(name, ignoreCase = true) }?.let { return it.id }
+        return lendingRepository.insertContact(LendingContact(name = name)).toInt()
     }
 
     /** Records a draft through the normal add-transaction path and clears it from the inbox. */
@@ -429,6 +510,7 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                 jo.put("iconName", c.iconName)
                 jo.put("budgetLimit", c.budgetLimit)
                 jo.put("type", c.type)
+                jo.put("role", c.role)
                 catsArray.put(jo)
             }
             json.put("categories", catsArray)
@@ -522,9 +604,10 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                     val iconName = jo.getString("iconName")
                     val budgetLimit = jo.getDouble("budgetLimit")
                     val type = jo.optString("type", "EXPENSE")
+                    val role = jo.optString("role", CategoryRole.STANDARD)
                     
                     val newId = repository.insertCategory(
-                        Category(name = name, colorHex = colorHex, iconName = iconName, budgetLimit = budgetLimit, type = type)
+                        Category(name = name, colorHex = colorHex, iconName = iconName, budgetLimit = budgetLimit, type = type, role = role)
                     ).toInt()
                     catIdMapping[oldId] = newId
                 }
@@ -734,7 +817,7 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
     // CRUD Category APIs
     // Subcategories arrive with parentCategoryId unset; a null colorHexOverride gets the next lighter
     // shade of the parent so seeded lists (onboarding) still fan out into a gradient.
-    fun addCategory(name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Subcategory>, type: String = "EXPENSE") {
+    fun addCategory(name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Subcategory>, type: String = "EXPENSE", role: String = CategoryRole.STANDARD) {
         viewModelScope.launch {
             val id = repository.insertCategory(
                 Category(
@@ -742,7 +825,8 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                     colorHex = normalizeHex(colorHex),
                     iconName = iconName,
                     budgetLimit = budget,
-                    type = type
+                    type = type,
+                    role = role
                 )
             ).toInt()
 
@@ -761,9 +845,12 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
     }
 
     // Subcategories are reconciled by id rather than rebuilt, so transactions keep pointing at the
-    // same rows after a rename, icon change or reorder.
-    fun editCategory(id: Int, name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Subcategory>, type: String = "EXPENSE") {
+    // same rows after a rename, icon change or reorder. A null role keeps the category's current one.
+    fun editCategory(id: Int, name: String, colorHex: String, iconName: String, budget: Double, subcategoriesList: List<Subcategory>, type: String = "EXPENSE", role: String? = null) {
         viewModelScope.launch {
+            val current = repository.getCategoryById(id)
+            // System categories keep their role: the lending ledger and transfers depend on it
+            val keptRole = if (current?.isSystem == true) current.role else role ?: current?.role ?: CategoryRole.STANDARD
             repository.updateCategory(
                 Category(
                     id = id,
@@ -771,7 +858,8 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
                     colorHex = normalizeHex(colorHex),
                     iconName = iconName,
                     budgetLimit = budget,
-                    type = type
+                    type = type,
+                    role = keptRole
                 )
             )
 
@@ -791,7 +879,7 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun deleteCategory(category: Category) {
-        if (category.name == "Lending" || category.name == "Loan Repayment") {
+        if (category.isSystem) {
             return
         }
         viewModelScope.launch {
@@ -937,18 +1025,22 @@ class CategoryViewModel(application: Application) : AndroidViewModel(application
         timestamp: Long = System.currentTimeMillis()
     ) {
         viewModelScope.launch {
-            val trimmedDesc = description.trim()
-            val entryId = lendingRepository.insertEntry(
-                LendingEntry(
-                    contactId = contactId,
-                    amount = amount,
-                    direction = direction,
-                    description = trimmedDesc,
-                    timestamp = timestamp
-                )
-            ).toInt()
-            syncTransactionForLendingEntry(entryId, contactId, amount, direction, trimmedDesc, timestamp)
+            insertLendingEntry(contactId, amount, direction, description, timestamp)
         }
+    }
+
+    private suspend fun insertLendingEntry(contactId: Int, amount: Double, direction: String, description: String, timestamp: Long) {
+        val trimmedDesc = description.trim()
+        val entryId = lendingRepository.insertEntry(
+            LendingEntry(
+                contactId = contactId,
+                amount = amount,
+                direction = direction,
+                description = trimmedDesc,
+                timestamp = timestamp
+            )
+        ).toInt()
+        syncTransactionForLendingEntry(entryId, contactId, amount, direction, trimmedDesc, timestamp)
     }
 
     fun updateLendingEntry(entry: LendingEntry) {
