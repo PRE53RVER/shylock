@@ -5381,7 +5381,8 @@ fun AddTransactionDialog(
                         label = { Text("Description") },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor()
+                            // Editable anchor keeps the suggestion popup non-focusable, so typing/backspace stay in the field
+                            .menuAnchor(MenuAnchorType.PrimaryEditable)
                             .onFocusChanged { isDescFocused = it.isFocused }
                             .testTag("tx_desc_input"),
                         singleLine = true
