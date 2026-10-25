@@ -4,6 +4,8 @@ import com.example.data.db.CategoryDao
 import com.example.data.db.SubcategoryDao
 import com.example.data.db.TransactionDao
 import com.example.data.model.Category
+import com.example.data.model.CategoryRole
+import com.example.data.model.SystemCategories
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
 import kotlinx.coroutines.flow.Flow
@@ -48,43 +50,42 @@ class CategoryRepository(
         }
     }
 
+    /**
+     * Makes sure the built-in categories exist with the right side and role, and returns the
+     * lending pair (Lending, Loan Repayment) the ledger files its transactions under.
+     */
     suspend fun ensureSystemCategories(): Pair<Category, Category> {
         val categories = categoryDao.getAllCategories().first()
-        var lending = categories.find { it.name == "Lending" }
-        if (lending == null) {
-            val id = categoryDao.insertCategory(
-                Category(
-                    name = "Lending",
-                    colorHex = "#00B4D8",
-                    iconName = "payments",
-                    budgetLimit = 0.0,
-                    type = "EXPENSE"
-                )
-            ).toInt()
-            lending = categoryDao.getCategoryById(id)!!
-        } else if (lending.type != "EXPENSE") {
-            lending = lending.copy(type = "EXPENSE")
-            categoryDao.updateCategory(lending)
-        }
-
-        var repayment = categories.find { it.name == "Loan Repayment" }
-        if (repayment == null) {
-            val id = categoryDao.insertCategory(
-                Category(
-                    name = "Loan Repayment",
-                    colorHex = "#00C9A7",
-                    iconName = "trending_up",
-                    budgetLimit = 0.0,
-                    type = "INCOME"
-                )
-            ).toInt()
-            repayment = categoryDao.getCategoryById(id)!!
-        } else if (repayment.type != "INCOME") {
-            repayment = repayment.copy(type = "INCOME")
-            categoryDao.updateCategory(repayment)
-        }
-
+        val lending = ensureSystemCategory(categories, SystemCategories.LENDING, "#00B4D8", "payments", "EXPENSE", CategoryRole.LENDING)
+        val repayment = ensureSystemCategory(categories, SystemCategories.LOAN_REPAYMENT, "#00C9A7", "trending_up", "INCOME", CategoryRole.LENDING)
+        ensureSystemCategory(categories, SystemCategories.TRANSFER_OUT, "#78909C", "swap_horiz", "EXPENSE", CategoryRole.TRANSFER)
+        ensureSystemCategory(categories, SystemCategories.TRANSFER_IN, "#90A4AE", "swap_horiz", "INCOME", CategoryRole.TRANSFER)
         return Pair(lending, repayment)
+    }
+
+    private suspend fun ensureSystemCategory(
+        existing: List<Category>,
+        name: String,
+        colorHex: String,
+        iconName: String,
+        type: String,
+        role: String
+    ): Category {
+        val found = existing.find { it.name == name }
+            ?: return categoryDao.getCategoryById(
+                categoryDao.insertCategory(
+                    Category(name = name, colorHex = colorHex, iconName = iconName, budgetLimit = 0.0, type = type, role = role)
+                ).toInt()
+            )!!
+        if (found.type == type && found.role == role) return found
+        val fixed = found.copy(type = type, role = role)
+        categoryDao.updateCategory(fixed)
+        return fixed
+    }
+
+    suspend fun findSystemCategory(name: String): Category? {
+        ensureSystemCategories()
+        return categoryDao.getCategoryByName(name)
     }
 
     suspend fun insertCategory(category: Category): Long {
@@ -145,14 +146,14 @@ class CategoryRepository(
             val catEduId = categoryDao.insertCategory(Category(name = "Education", colorHex = "#3A86FF", iconName = "school", budgetLimit = 5000.0, type = "EXPENSE")).toInt()
 
             // Seed Subcategories for Food
-            val subBreakfast = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Breakfast", colorHexOverride = "#FF8585")).toInt()
-            val subLunch = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Lunch", colorHexOverride = "#FF9999")).toInt()
-            val subDinner = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Dinner", colorHexOverride = "#FFB3B3")).toInt()
-            val subSnacks = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Tea & Snacks", colorHexOverride = "#FFC9C9")).toInt()
+            val subBreakfast = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Breakfast", colorHexOverride = "#FF8585", iconName = "bakery_dining", sortOrder = 0)).toInt()
+            val subLunch = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Lunch", colorHexOverride = "#FF9999", iconName = "lunch_dining", sortOrder = 1)).toInt()
+            val subDinner = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Dinner", colorHexOverride = "#FFB3B3", iconName = "dinner_dining", sortOrder = 2)).toInt()
+            val subSnacks = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catFoodId, name = "Tea & Snacks", colorHexOverride = "#FFC9C9", iconName = "local_cafe", sortOrder = 3)).toInt()
 
             // Seed Subcategories for Transport
-            val subFuel = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catTransportId, name = "Fuel", colorHexOverride = "#70A9FF")).toInt()
-            val subMetro = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catTransportId, name = "Metro & Train", colorHexOverride = "#94BDFF")).toInt()
+            val subFuel = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catTransportId, name = "Fuel", colorHexOverride = "#70A9FF", iconName = "local_gas_station", sortOrder = 0)).toInt()
+            val subMetro = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catTransportId, name = "Metro & Train", colorHexOverride = "#94BDFF", iconName = "subway", sortOrder = 1)).toInt()
 
             // Seed Income Categories
             val catSalaryId = categoryDao.insertCategory(Category(name = "Salary", colorHex = "#2E7D32", iconName = "payments", budgetLimit = 0.0, type = "INCOME")).toInt()
@@ -161,12 +162,12 @@ class CategoryRepository(
             val catInterestId = categoryDao.insertCategory(Category(name = "Interest", colorHex = "#1E88E5", iconName = "trending_up", budgetLimit = 0.0, type = "INCOME")).toInt()
 
             // Subcategories for Income
-            val subSalaryMonthly = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Monthly Pay", colorHexOverride = "#4CAF50")).toInt()
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Bonus", colorHexOverride = "#81C784"))
-            val subBizInvoice = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Client Invoice", colorHexOverride = "#26A69A")).toInt()
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Consulting", colorHexOverride = "#80CBC4"))
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catGiftsId, name = "Presents", colorHexOverride = "#F06292"))
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catInterestId, name = "Dividends", colorHexOverride = "#42A5F5"))
+            val subSalaryMonthly = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Monthly Pay", colorHexOverride = "#4CAF50", iconName = "payments", sortOrder = 0)).toInt()
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Bonus", colorHexOverride = "#81C784", iconName = "loyalty", sortOrder = 1))
+            val subBizInvoice = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Client Invoice", colorHexOverride = "#26A69A", iconName = "request_quote", sortOrder = 0)).toInt()
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Consulting", colorHexOverride = "#80CBC4", iconName = "handshake", sortOrder = 1))
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catGiftsId, name = "Presents", colorHexOverride = "#F06292", iconName = "card_giftcard"))
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catInterestId, name = "Dividends", colorHexOverride = "#42A5F5", iconName = "show_chart"))
 
             // Curr month spending (Expense)
             transactionDao.insertTransaction(Transaction(categoryId = catFoodId, subcategoryId = subBreakfast, amount = 350.0, description = "Breakfast pancakes", timestamp = now - 1 * dayMs, type = "EXPENSE"))
@@ -213,12 +214,12 @@ class CategoryRepository(
             val catGiftsId = categoryDao.insertCategory(Category(name = "Gifts", colorHex = "#D81B60", iconName = "card_giftcard", budgetLimit = 0.0, type = "INCOME")).toInt()
             val catInterestId = categoryDao.insertCategory(Category(name = "Interest", colorHex = "#1E88E5", iconName = "trending_up", budgetLimit = 0.0, type = "INCOME")).toInt()
 
-            val subSalaryMonthly = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Monthly Pay", colorHexOverride = "#4CAF50")).toInt()
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Bonus", colorHexOverride = "#81C784"))
-            val subBizInvoice = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Client Invoice", colorHexOverride = "#26A69A")).toInt()
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Consulting", colorHexOverride = "#80CBC4"))
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catGiftsId, name = "Presents", colorHexOverride = "#F06292"))
-            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catInterestId, name = "Dividends", colorHexOverride = "#42A5F5"))
+            val subSalaryMonthly = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Monthly Pay", colorHexOverride = "#4CAF50", iconName = "payments", sortOrder = 0)).toInt()
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catSalaryId, name = "Bonus", colorHexOverride = "#81C784", iconName = "loyalty", sortOrder = 1))
+            val subBizInvoice = subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Client Invoice", colorHexOverride = "#26A69A", iconName = "request_quote", sortOrder = 0)).toInt()
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catBusinessId, name = "Consulting", colorHexOverride = "#80CBC4", iconName = "handshake", sortOrder = 1))
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catGiftsId, name = "Presents", colorHexOverride = "#F06292", iconName = "card_giftcard"))
+            subcategoryDao.insertSubcategory(Subcategory(parentCategoryId = catInterestId, name = "Dividends", colorHexOverride = "#42A5F5", iconName = "show_chart"))
 
             // Seed a demo income transaction if none exist
             transactionDao.insertTransaction(Transaction(categoryId = catSalaryId, subcategoryId = subSalaryMonthly, amount = 75000.0, description = "Monthly Salary Credit", timestamp = now - 5 * dayMs, type = "INCOME"))

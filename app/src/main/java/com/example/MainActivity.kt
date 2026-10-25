@@ -1,6 +1,12 @@
 package com.example
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -60,19 +66,55 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.example.data.model.Category
+import com.example.data.model.DetectedPayment
 import com.example.data.model.Subcategory
 import com.example.data.model.Transaction
+import com.example.data.model.FlowKind
+import com.example.data.model.FlowSummary
+import com.example.data.model.LendingContact
+import com.example.data.model.RecordKind
+import com.example.data.model.recordKind
+import com.example.data.model.TxType
+import com.example.data.model.countsInTotals
 import com.example.data.model.displayName
+import com.example.data.model.flowKind
+import com.example.data.model.isInflow
+import com.example.data.model.isLending
+import com.example.data.model.isRefund
+import com.example.data.model.realSpendByCategory
+import com.example.data.model.spendDelta
+import com.example.data.model.summarizeFlow
+import com.example.ui.screens.CalendarCategoryTransactionsScreen
+import com.example.ui.screens.CalendarDayDetailScreen
+import com.example.ui.screens.CategoryEditorDialog
 import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.LendingListScreen
+import com.example.ui.screens.ManageCategoriesScreen
+import com.example.ui.screens.LendingContactPicker
+import com.example.ui.screens.LendingInsightStrip
+import com.example.ui.screens.MoneyFlowStrip
+import com.example.ui.screens.NotCountedExplainer
+import com.example.ui.screens.SpendPaceCard
+import com.example.ui.screens.TopSpendsCard
+import com.example.ui.screens.computeSpendPace
+import com.example.ui.screens.topPayees
+import com.example.ui.screens.unusualSpends
 import com.example.ui.screens.LendingSummaryCard
+import com.example.ui.screens.RecordKindChip
+import com.example.ui.screens.recordKindHint
+import com.example.ui.screens.MoneyInboxScreen
+import com.example.ui.screens.PendingBadge
+import com.example.inbox.MoneyInboxNotifications
+import com.example.inbox.MoneyInboxSettings
 import com.example.ui.screens.OnboardingWizard
 import com.example.ui.screens.ShylockCurrencies
+import com.example.ui.screens.SpendingCalendarScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.AppTheme
@@ -118,6 +160,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        MoneyInboxNotifications.ensureChannels(this)
+        MoneyInboxNotifications.syncDailyReminder(this)
+        handleInboxIntent(intent)
         setContent {
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val dynamicColorEnabled by viewModel.dynamicColor.collectAsStateWithLifecycle()
@@ -135,7 +180,25 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleInboxIntent(intent)
+    }
+
+    // A tap on a "Payment detected" / daily reminder notification lands on the Money Inbox tab
+    private fun handleInboxIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(MoneyInboxNotifications.EXTRA_OPEN_INBOX, false) == true) {
+            intent.removeExtra(MoneyInboxNotifications.EXTRA_OPEN_INBOX)
+            viewModel.requestOpenInbox()
+        }
+    }
 }
+
+// Plain number for the amount input: "500" rather than "500.0", two decimals when needed
+fun formatAmountInput(amount: Double): String =
+    if (amount % 1.0 == 0.0) amount.toLong().toString() else String.format(Locale.US, "%.2f", amount)
 
 // Helper to format values with Rupee symbol and Indian locale grouping (e.g., ₹12,34,567)
 fun formatInRupee(amount: Double, currency: String = "₹"): String {
@@ -149,65 +212,28 @@ fun formatInRupee(amount: Double, currency: String = "₹"): String {
     }
 }
 
-// Map strings to beautiful Material Icon vectors
-fun getIconVector(name: String): ImageVector {
-    return when (name.lowercase()) {
-        "restaurant", "food", "dining" -> Icons.Default.Restaurant
-        "directions_car", "transport", "car" -> Icons.Default.DirectionsCar
-        "shopping_bag", "shopping", "bag" -> Icons.Default.ShoppingBag
-        "medical_services", "health", "hospital" -> Icons.Default.MedicalServices
-        "movie", "entertainment", "play" -> Icons.Default.Movie
-        "receipt_long", "bills", "invoice" -> Icons.Default.ReceiptLong
-        "flight", "travel", "plane" -> Icons.Default.Flight
-        "school", "education", "book" -> Icons.Default.School
-        "fitness_center", "gym" -> Icons.Default.FitnessCenter
-        "home", "house" -> Icons.Default.Home
-        "build", "tools" -> Icons.Default.Build
-        "pets" -> Icons.Default.Pets
-        "wallet", "salary", "account_balance_wallet" -> Icons.Default.AccountBalanceWallet
-        "work", "business" -> Icons.Default.Work
-        "gift", "card_giftcard" -> Icons.Default.CardGiftcard
-        "trending_up", "interest" -> Icons.AutoMirrored.Filled.TrendingUp
-        else -> Icons.Default.Category
-    }
-}
+// Resolves a persisted icon key (see CategoryIcons.kt) to a glyph, falling back to the generic tag
+fun getIconVector(name: String): ImageVector = findCategoryIcon(name) ?: Icons.Default.Category
 
-// Map subcategory names to appropriate, compile-safe Material Icon vectors
-fun getSubcategoryIcon(name: String): ImageVector {
-    val lower = name.lowercase()
-    return when {
-        lower.contains("breakfast") || lower.contains("lunch") || lower.contains("dinner") || lower.contains("snack") || lower.contains("tea") || lower.contains("coffee") || lower.contains("food") || lower.contains("dining") -> Icons.Default.Restaurant
-        lower.contains("fuel") || lower.contains("gas") || lower.contains("petrol") || lower.contains("car") || lower.contains("taxi") || lower.contains("cab") -> Icons.Default.DirectionsCar
-        lower.contains("train") || lower.contains("metro") || lower.contains("bus") || lower.contains("transit") || lower.contains("flight") || lower.contains("travel") -> Icons.Default.Flight
-        lower.contains("movie") || lower.contains("show") || lower.contains("theater") || lower.contains("play") || lower.contains("game") || lower.contains("entertainment") -> Icons.Default.Movie
-        lower.contains("gym") || lower.contains("workout") || lower.contains("fitness") -> Icons.Default.FitnessCenter
-        lower.contains("rent") || lower.contains("bill") || lower.contains("electricity") || lower.contains("water") || lower.contains("utility") -> Icons.Default.ReceiptLong
-        lower.contains("hospital") || lower.contains("doctor") || lower.contains("health") || lower.contains("medicine") || lower.contains("dental") -> Icons.Default.MedicalServices
-        lower.contains("pet") || lower.contains("dog") || lower.contains("cat") -> Icons.Default.Pets
-        lower.contains("book") || lower.contains("school") || lower.contains("education") || lower.contains("class") -> Icons.Default.School
-        lower.contains("rent") || lower.contains("home") || lower.contains("house") -> Icons.Default.Home
-        lower.contains("repair") || lower.contains("tool") || lower.contains("fix") -> Icons.Default.Build
-        lower.contains("shop") || lower.contains("cloth") || lower.contains("grocer") || lower.contains("bag") -> Icons.Default.ShoppingBag
-        else -> Icons.Default.Category
-    }
-}
-
-val ICON_OPTIONS = listOf(
-    "restaurant", "directions_car", "shopping_bag", "medical_services",
-    "movie", "receipt_long", "flight", "school", "fitness_center", "home",
-    "build", "pets"
-)
+// Name-based guess for subcategories that never had an icon assigned
+fun getSubcategoryIcon(name: String): ImageVector =
+    findCategoryIcon(guessSubcategoryIconName(name)) ?: Icons.Default.Category
 
 enum class AnalysisPeriod {
     WEEKLY, MONTHLY, YEARLY
 }
 
-fun calculatePeriodStats(
-    categories: List<Category>,
-    transactions: List<Transaction>,
-    period: AnalysisPeriod,
-    selectedMonth: YearMonth = YearMonth.now()
-): Map<Int, CategoryStats> {
+/** The current and previous time windows (inclusive epoch millis) an analysis period covers. */
+data class AnalysisWindow(val start: Long, val end: Long, val previousStart: Long, val previousEnd: Long) {
+    val current: LongRange get() = start..end
+    val previous: LongRange get() = previousStart..previousEnd
+}
+
+/**
+ * Weekly is the last 7 days, monthly the calendar month and yearly the last 12 months, all ending
+ * today for the current month or at the month's end for a past one.
+ */
+fun analysisWindow(period: AnalysisPeriod, selectedMonth: YearMonth = YearMonth.now()): AnalysisWindow {
     val zone = ZoneId.systemDefault()
     val isCurrentMonth = selectedMonth == YearMonth.now()
     val anchorDate = if (isCurrentMonth) LocalDate.now() else selectedMonth.atEndOfMonth()
@@ -216,51 +242,53 @@ fun calculatePeriodStats(
     } else {
         selectedMonth.atEndOfMonth().atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli()
     }
+    fun startOf(date: LocalDate) = date.atStartOfDay(zone).toInstant().toEpochMilli()
+    fun endOf(month: YearMonth) = month.atEndOfMonth().atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli()
 
-    // Filter transactions based on period anchored to selectedMonth (and type == "EXPENSE")
-    val (filteredTransactions, previousPeriodTransactions) = when (period) {
+    return when (period) {
         AnalysisPeriod.WEEKLY -> {
-            val weekStart = anchorDate.minusDays(6).atStartOfDay(zone).toInstant().toEpochMilli()
-            val weekEnd = anchorMillis
-            val prevWeekStart = anchorDate.minusDays(13).atStartOfDay(zone).toInstant().toEpochMilli()
-            val prevWeekEnd = weekStart - 1
-
-            val curr = transactions.filter { it.timestamp in weekStart..weekEnd && it.type == "EXPENSE" }
-            val prev = transactions.filter { it.valueTimestamp() in prevWeekStart..prevWeekEnd && it.type == "EXPENSE" }
-            curr to prev
+            val start = startOf(anchorDate.minusDays(6))
+            AnalysisWindow(start, anchorMillis, startOf(anchorDate.minusDays(13)), start - 1)
         }
         AnalysisPeriod.MONTHLY -> {
-            val monthStart = selectedMonth.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val monthEnd = selectedMonth.atEndOfMonth().atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli()
-
             val prevMonth = selectedMonth.minusMonths(1)
-            val prevMonthStart = prevMonth.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val prevMonthEnd = prevMonth.atEndOfMonth().atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli()
-
-            val curr = transactions.filter { it.timestamp in monthStart..monthEnd && it.type == "EXPENSE" }
-            val prev = transactions.filter { it.valueTimestamp() in prevMonthStart..prevMonthEnd && it.type == "EXPENSE" }
-            curr to prev
+            AnalysisWindow(startOf(selectedMonth.atDay(1)), endOf(selectedMonth), startOf(prevMonth.atDay(1)), endOf(prevMonth))
         }
         AnalysisPeriod.YEARLY -> {
-            val yearStart = selectedMonth.minusMonths(11).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val yearEnd = anchorMillis
-            val prevYearStart = selectedMonth.minusMonths(23).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val prevYearEnd = yearStart - 1
-
-            val curr = transactions.filter { it.timestamp in yearStart..yearEnd && it.type == "EXPENSE" }
-            val prev = transactions.filter { it.valueTimestamp() in prevYearStart..prevYearEnd && it.type == "EXPENSE" }
-            curr to prev
+            val start = startOf(selectedMonth.minusMonths(11).atDay(1))
+            AnalysisWindow(start, anchorMillis, startOf(selectedMonth.minusMonths(23).atDay(1)), start - 1)
         }
     }
+}
 
-    val totalSpend = filteredTransactions.sumOf { it.amount }
+/**
+ * Per-category real spending (purchases minus refunds) for the period and the one before it.
+ * Only categories that count towards totals are included, so lending and transfers never show up
+ * in the breakdown or inflate the headline.
+ */
+fun calculatePeriodStats(
+    categories: List<Category>,
+    transactions: List<Transaction>,
+    period: AnalysisPeriod,
+    selectedMonth: YearMonth = YearMonth.now()
+): Map<Int, CategoryStats> {
+    val window = analysisWindow(period, selectedMonth)
+    val categoriesById = categories.associateBy { it.id }
 
-    return categories.associate { category ->
-        val catCurrentTx = filteredTransactions.filter { it.categoryId == category.id }
-        val catPreviousTx = previousPeriodTransactions.filter { it.categoryId == category.id }
+    val currentTx = transactions.filter { it.timestamp in window.current }
+    val previousTx = transactions.filter { it.timestamp in window.previous }
+    val currentByCategory = realSpendByCategory(currentTx, categoriesById)
+    val previousByCategory = realSpendByCategory(previousTx, categoriesById)
+    val countByCategory = currentTx
+        .filter { it.spendDelta(categoriesById[it.categoryId]) != 0.0 }
+        .groupingBy { it.categoryId }
+        .eachCount()
 
-        val currentSum = catCurrentTx.sumOf { it.amount }
-        val previousSum = catPreviousTx.sumOf { it.amount }
+    val totalSpend = currentByCategory.values.sum()
+
+    return categories.filter { it.countsInTotals && it.type == TxType.EXPENSE }.associate { category ->
+        val currentSum = currentByCategory[category.id] ?: 0.0
+        val previousSum = previousByCategory[category.id] ?: 0.0
 
         val percentage = if (totalSpend > 0.0) {
             (currentSum / totalSpend) * 100.0
@@ -279,7 +307,7 @@ fun calculatePeriodStats(
         category.id to CategoryStats(
             categoryId = category.id,
             totalAmount = currentSum,
-            transactionCount = catCurrentTx.size,
+            transactionCount = countByCategory[category.id] ?: 0,
             percentage = percentage,
             trendPercentage = trend,
             currentMonthTotal = currentSum,
@@ -313,6 +341,45 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     val defaultType by viewModel.defaultTransactionType.collectAsStateWithLifecycle()
     val onboardingComplete by viewModel.onboardingComplete.collectAsStateWithLifecycle()
     val currentAppTheme by viewModel.appTheme.collectAsStateWithLifecycle()
+    val lendingEntries by viewModel.lendingEntries.collectAsStateWithLifecycle()
+    val lendingContacts by viewModel.lendingContacts.collectAsStateWithLifecycle()
+
+    // Money Inbox state
+    val detectedPayments by viewModel.detectedPayments.collectAsStateWithLifecycle()
+    val pendingInboxCount by viewModel.pendingInboxCount.collectAsStateWithLifecycle()
+    val paymentDetectionEnabled by viewModel.paymentDetectionEnabled.collectAsStateWithLifecycle()
+    val paymentAlertsEnabled by viewModel.paymentAlertsEnabled.collectAsStateWithLifecycle()
+    val dailyReviewReminderEnabled by viewModel.dailyReviewReminderEnabled.collectAsStateWithLifecycle()
+    val openInboxRequest by viewModel.openInboxRequest.collectAsStateWithLifecycle()
+    // Notification-listener access is granted in system settings, so re-check whenever we resume
+    var hasNotificationAccess by remember { mutableStateOf(MoneyInboxSettings.hasNotificationAccess(context)) }
+    LifecycleResumeEffect(Unit) {
+        hasNotificationAccess = MoneyInboxSettings.hasNotificationAccess(context)
+        onPauseOrDispose { }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { /* Alerts silently stay off at the OS level if declined; the toggle itself is kept */ }
+    val requestPostNotifications: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    val openNotificationAccessSettings: () -> Unit = {
+        try {
+            context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            Toast.makeText(context, "Open Settings > Notifications > Notification access to allow SHYLOCK", Toast.LENGTH_LONG).show()
+        }
+    }
+    // Turning detection on also walks the user to the system screen where access is granted
+    val enablePaymentDetection: () -> Unit = {
+        viewModel.setPaymentDetectionEnabled(true)
+        requestPostNotifications()
+        if (!MoneyInboxSettings.hasNotificationAccess(context)) openNotificationAccessSettings()
+    }
 
     // Month navigation & scoping states
     val selectedMonth by viewModel.selectedMonth.collectAsStateWithLifecycle()
@@ -327,6 +394,18 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: "home"
+
+    // Notification taps ask for the inbox; honour it once the nav graph is ready
+    LaunchedEffect(openInboxRequest, onboardingComplete) {
+        if (openInboxRequest && onboardingComplete) {
+            navController.navigate("inbox") {
+                popUpTo("home") { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            viewModel.consumeOpenInboxRequest()
+        }
+    }
 
     // Reset past month unlock state when navigating to another month or tab
     LaunchedEffect(selectedMonth) {
@@ -350,23 +429,21 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
         }
     }
 
-    val totalMonthIncome = remember(monthTransactions) {
-        monthTransactions
-            .filter { it.type == "INCOME" }
-            .sumOf { it.amount }
-    }
+    val categoriesById = remember(categories) { categories.associateBy { it.id } }
 
-    val totalMonthSpend = remember(monthTransactions) {
-        monthTransactions
-            .filter { it.type == "EXPENSE" }
-            .sumOf { it.amount }
+    // Real income and spending: lending, transfers and refunds are netted out (see MoneyFlow)
+    val monthFlow = remember(monthTransactions, categoriesById) {
+        summarizeFlow(monthTransactions, categoriesById)
     }
+    val totalMonthIncome = monthFlow.income
+    val totalMonthSpend = monthFlow.realSpend
 
-    val lastMonthSpendVal = remember(transactions, selectedMonth) {
+    val lastMonthSpendVal = remember(transactions, selectedMonth, categoriesById) {
         val prevMonth = selectedMonth.minusMonths(1)
-        transactions
-            .filter { it.type == "EXPENSE" && YearMonth.from(Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault())) == prevMonth }
-            .sumOf { it.amount }
+        summarizeFlow(
+            transactions.filter { YearMonth.from(Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault())) == prevMonth },
+            categoriesById
+        ).realSpend
     }
 
     // Document Creation Launcher (for JSON backup export)
@@ -413,9 +490,14 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     // Modal state controllers
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var addCategoryDefaultType by remember { mutableStateOf("EXPENSE") }
+    // Manage Categories: which tab is open (also colours its FAB) and the user's drag order.
+    // Both live here so they survive leaving and re-entering the screen within a session.
+    var categoriesTypeTab by remember { mutableStateOf("EXPENSE") }
+    val categoryCustomOrder = remember { mutableStateListOf<Int>() }
     var showAddTransactionDialog by remember { mutableStateOf(false) }
     var editCategoryTarget by remember { mutableStateOf<Category?>(null) }
     var transactionToEdit by remember { mutableStateOf<Transaction?>(null) }
+    var inboxDraftTarget by remember { mutableStateOf<DetectedPayment?>(null) }
     var categoryToDelete by remember { mutableStateOf<Category?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
     var resetConfirmationText by remember { mutableStateOf("") }
@@ -434,34 +516,24 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
     }
     val totalPeriodSpend = periodStats.values.sumOf { it.totalAmount }
 
-    val filteredTrendTransactions = remember(transactions, selectedAnalysisPeriod, selectedMonth) {
-        val zone = ZoneId.systemDefault()
-        val isCurrentMonth = selectedMonth == YearMonth.now()
-        val anchorDate = if (isCurrentMonth) LocalDate.now() else selectedMonth.atEndOfMonth()
-        val anchorMillis = if (isCurrentMonth) {
-            System.currentTimeMillis()
-        } else {
-            selectedMonth.atEndOfMonth().atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli()
-        }
-        when (selectedAnalysisPeriod) {
-            AnalysisPeriod.WEEKLY -> {
-                val start = anchorDate.minusDays(6).atStartOfDay(zone).toInstant().toEpochMilli()
-                transactions.filter { it.timestamp in start..anchorMillis && it.type == "EXPENSE" }
-            }
-            AnalysisPeriod.MONTHLY -> {
-                val start = selectedMonth.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-                val end = selectedMonth.atEndOfMonth().atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli()
-                transactions.filter { it.timestamp in start..end && it.type == "EXPENSE" }
-            }
-            AnalysisPeriod.YEARLY -> {
-                val start = selectedMonth.minusMonths(11).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-                transactions.filter { it.timestamp in start..anchorMillis && it.type == "EXPENSE" }
-            }
-        }
+    val analysisWindowNow = remember(selectedAnalysisPeriod, selectedMonth) {
+        analysisWindow(selectedAnalysisPeriod, selectedMonth)
+    }
+    val periodTransactions = remember(transactions, analysisWindowNow) {
+        transactions.filter { it.timestamp in analysisWindowNow.current }
+    }
+    val periodFlow = remember(periodTransactions, categoriesById) {
+        summarizeFlow(periodTransactions, categoriesById)
+    }
+    // Purchases only (no refunds, lending or transfers) for the rhythm sparkline and trend line
+    val filteredTrendTransactions = remember(periodTransactions, categoriesById) {
+        periodTransactions.filter { it.flowKind(categoriesById[it.categoryId]) == FlowKind.SPEND }
     }
 
     val isLendingScreen = currentRoute == "lending" || (currentRoute?.startsWith("lending_contact") == true)
     val isOnboardingScreen = currentRoute == "onboarding" || currentRoute == "onboarding_tour"
+    // Calendar drill-down (month -> day -> category) is full screen with its own back button
+    val isCalendarScreen = currentRoute.startsWith("calendar")
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -471,7 +543,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             // Home, Insights and Settings host their own headers inside the scroll body so they can
             // scroll away and hand the whole viewport back to content; the other tabs keep a
             // lightweight title.
-            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "insights" && currentRoute != "settings" && !isLendingScreen) {
+            if (!isOnboardingScreen && currentRoute != "home" && currentRoute != "inbox" && currentRoute != "insights" && currentRoute != "settings" && currentRoute != "categories" && !isLendingScreen && !isCalendarScreen) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
@@ -526,23 +598,37 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                         }
                     }
                 } else if (currentRoute == "categories") {
+                    // Matches the open tab: income is green, expense takes the app accent
+                    val fabColor = if (categoriesTypeTab == "INCOME") IncomeGreen else MaterialTheme.colorScheme.primary
                     FloatingActionButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        showAddCategoryDialog = true
-                    },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.testTag("add_category_btn"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Category")
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            addCategoryDefaultType = categoriesTypeTab
+                            showAddCategoryDialog = true
+                        },
+                        containerColor = fabColor,
+                        contentColor = Color.White,
+                        shape = CircleShape,
+                        elevation = FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 0.dp,
+                            pressedElevation = 0.dp
+                        ),
+                        modifier = Modifier
+                            .accentGlow(color = fabColor, shape = CircleShape, elevation = 12.dp)
+                            .size(58.dp)
+                            .testTag("add_category_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Category",
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
-        }
-    },
+        },
         bottomBar = {
-            if (!isOnboardingScreen && !isLendingScreen) {
+            if (!isOnboardingScreen && !isLendingScreen && !isCalendarScreen) {
                 val navShape = RoundedCornerShape(26.dp)
                 Box(
                     modifier = Modifier
@@ -562,6 +648,7 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     ) {
                         val navItems = listOf(
                             Triple("home", Icons.Default.Home, "Home"),
+                            Triple("inbox", Icons.Default.Email, "Money Inbox"),
                             Triple("insights", Icons.Default.BarChart, "Insights"),
                             Triple("settings", Icons.Default.Settings, "Settings")
                         )
@@ -578,7 +665,23 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                         }
                                     }
                                 },
-                                icon = { Icon(imageVector = icon, contentDescription = label) },
+                                icon = {
+                                    if (route == "inbox" && pendingInboxCount > 0) {
+                                        BadgedBox(
+                                            badge = {
+                                                PendingBadge(
+                                                    count = pendingInboxCount,
+                                                    compact = true,
+                                                    modifier = Modifier.testTag("nav_inbox_badge")
+                                                )
+                                            }
+                                        ) {
+                                            Icon(imageVector = icon, contentDescription = label)
+                                        }
+                                    } else {
+                                        Icon(imageVector = icon, contentDescription = label)
+                                    }
+                                },
                                 label = {
                                     Text(
                                         label,
@@ -642,10 +745,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
 
                 // ================== RECORDS TAB ==================
                 // Dashboard Summary Header
-                val incomeCount = remember(monthTransactions) { monthTransactions.count { it.type == "INCOME" } }
-                val expenseCount = remember(monthTransactions) { monthTransactions.count { it.type == "EXPENSE" } }
-                val spendSparkline = remember(monthTransactions, selectedMonth) {
-                    buildSpendSparkline(monthTransactions, selectedMonth)
+                val incomeCount = remember(monthTransactions) { monthTransactions.count { it.isInflow } }
+                val expenseCount = remember(monthTransactions) { monthTransactions.count { !it.isInflow } }
+                val spendSparkline = remember(monthTransactions, selectedMonth, categoriesById) {
+                    buildSpendSparkline(monthTransactions, selectedMonth, categoriesById)
                 }
 
                 DashboardHeader(
@@ -661,8 +764,6 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                 )
 
                 // Lending Ledger Compact Summary Card (Separate Ledger)
-                val lendingEntries by viewModel.lendingEntries.collectAsStateWithLifecycle()
-                val lendingContacts by viewModel.lendingContacts.collectAsStateWithLifecycle()
                 val totalLendingOutstanding = remember(lendingEntries) {
                     lendingEntries.fold(0.0) { acc, entry ->
                         if (entry.direction == "LENT") acc + entry.amount else acc - entry.amount
@@ -953,8 +1054,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                 // Transaction Filtering based on searchQuery and selectedTypeFilter within the selected month
                                 val filteredTransactions = remember(monthTransactions, searchQuery, selectedTypeFilter) {
                                     var list = monthTransactions
-                                    if (selectedTypeFilter != "ALL") {
-                                        list = list.filter { it.type == selectedTypeFilter }
+                                    when (selectedTypeFilter) {
+                                        // Refunds are money coming in, so they sit with income
+                                        "INCOME" -> list = list.filter { it.isInflow }
+                                        "EXPENSE" -> list = list.filter { !it.isInflow }
                                     }
                                     if (searchQuery.isNotBlank()) {
                                         list = list.filter {
@@ -1075,9 +1178,65 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             }
         }
 
+        // === Destination: Money Inbox (payments detected from notifications) ===
+        composable("inbox") {
+            MoneyInboxScreen(
+                payments = detectedPayments,
+                currencySymbol = currencySymbol,
+                detectionEnabled = paymentDetectionEnabled,
+                hasNotificationAccess = hasNotificationAccess,
+                onRecord = { payment -> inboxDraftTarget = payment },
+                onDismiss = { payment ->
+                    viewModel.dismissDetectedPayment(payment)
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Payment dismissed",
+                            actionLabel = "Undo",
+                            duration = SnackbarDuration.Short
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            viewModel.restoreDetectedPayment(payment)
+                        }
+                    }
+                },
+                onEnableDetection = enablePaymentDetection,
+                onGrantAccess = openNotificationAccessSettings,
+                onOpenSettings = {
+                    navController.navigate("settings") {
+                        popUpTo("home") { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+            )
+        }
+
         composable("insights") {
             val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
             val lastPeriodSpend = remember(periodStats) { periodStats.values.sumOf { it.previousMonthTotal } }
+            var showNotCountedInfo by remember { mutableStateOf(false) }
+            val spendPace = remember(periodTransactions, categoriesById, periodFlow, selectedAnalysisPeriod, selectedMonth) {
+                computeSpendPace(periodTransactions, categoriesById, periodFlow, selectedAnalysisPeriod, selectedMonth)
+            }
+            val topTransactions = remember(filteredTrendTransactions) {
+                filteredTrendTransactions.sortedByDescending { it.amount }.take(5)
+            }
+            val payees = remember(filteredTrendTransactions) { topPayees(filteredTrendTransactions) }
+            val unusual = remember(transactions, categories, periodStats, selectedAnalysisPeriod, selectedMonth) {
+                unusualSpends(
+                    transactions = transactions,
+                    categories = categories,
+                    currentByCategory = periodStats.mapValues { it.value.totalAmount },
+                    period = selectedAnalysisPeriod,
+                    selectedMonth = selectedMonth
+                )
+            }
+            val stillOwed = remember(lendingEntries) {
+                lendingEntries.sumOf { if (it.direction == "LENT") it.amount else -it.amount }.coerceAtLeast(0.0)
+            }
+            if (showNotCountedInfo) {
+                NotCountedExplainer(flow = periodFlow, currencySymbol = currencySymbol, onDismiss = { showNotCountedInfo = false })
+            }
             val periodSparkline = remember(filteredTrendTransactions, selectedAnalysisPeriod, selectedMonth) {
                 buildPeriodSparkline(filteredTrendTransactions, selectedAnalysisPeriod, selectedMonth)
             }
@@ -1193,7 +1352,10 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     totalSpend = totalPeriodSpend,
                     lastPeriodSpend = lastPeriodSpend,
                     currencySymbol = currencySymbol,
-                    sparkline = periodSparkline
+                    sparkline = periodSparkline,
+                    flow = periodFlow,
+                    onExplainNotCounted = { showNotCountedInfo = true },
+                    onCalendarClick = { navController.navigate("calendar") }
                 )
 
                 // Time Period Selector
@@ -1218,6 +1380,14 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                         modifier = Modifier
                             .weight(1f)
                             .testTag("analysis_period_selector")
+                    )
+                }
+
+                if (periodFlow.realSpend > 0.0) {
+                    SpendPaceCard(
+                        pace = spendPace,
+                        lastPeriodSpend = lastPeriodSpend,
+                        currencySymbol = currencySymbol
                     )
                 }
 
@@ -1333,11 +1503,35 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                                 category = catObj,
                                 stats = catStatsObj,
                                 currencySymbol = currencySymbol,
+                                previousNoun = when (selectedAnalysisPeriod) {
+                                    AnalysisPeriod.WEEKLY -> "Last Week"
+                                    AnalysisPeriod.MONTHLY -> "Last Month"
+                                    AnalysisPeriod.YEARLY -> "Last Year"
+                                },
                                 onClear = { viewModel.clearCategorySelection() }
                             )
                         }
                     }
                 }
+
+                TopSpendsCard(
+                    topTransactions = topTransactions,
+                    payees = payees,
+                    unusual = unusual,
+                    categoriesById = categoriesById,
+                    period = selectedAnalysisPeriod,
+                    currencySymbol = currencySymbol,
+                    // Open the record so a loan or refund filed as spending can be reclassified
+                    onTransactionClick = { tx -> if (tx.lendingEntryId == null) transactionToEdit = tx }
+                )
+
+                LendingInsightStrip(
+                    lentOut = periodFlow.lentOut,
+                    gotBack = periodFlow.gotBack,
+                    stillOwed = stillOwed,
+                    currencySymbol = currencySymbol,
+                    onClick = { navController.navigate("lending") }
+                )
             }
         }
 
@@ -1553,6 +1747,71 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                         trailing = {
                             SettingsValue(typeLabel)
                             SettingsChevron()
+                        }
+                    )
+                }
+
+                // ---------- Money Inbox ----------
+                SettingsSectionHeader(
+                    title = "Money Inbox",
+                    subtitle = "Detect payments from bank and UPI notifications",
+                    icon = { Icon(imageVector = Icons.Default.Email, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)) }
+                )
+                SettingsGroupCard {
+                    SettingsRow(
+                        title = "Payment detection",
+                        subtitle = if (paymentDetectionEnabled && !hasNotificationAccess) {
+                            "On, but notification access is not granted — tap to allow"
+                        } else {
+                            "Draft detected payments into Money Inbox for review"
+                        },
+                        onClick = if (paymentDetectionEnabled && !hasNotificationAccess) openNotificationAccessSettings else null,
+                        leading = { SettingsTileIcon(Icons.Default.Radar, "Detection") },
+                        trailing = {
+                            Switch(
+                                checked = paymentDetectionEnabled,
+                                onCheckedChange = { enabled ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (enabled) enablePaymentDetection() else viewModel.setPaymentDetectionEnabled(false)
+                                },
+                                modifier = Modifier.testTag("payment_detection_switch")
+                            )
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "New payment alerts",
+                        subtitle = "Notify me when a payment is detected",
+                        leading = { SettingsTileIcon(Icons.Default.NotificationsActive, "Alerts") },
+                        trailing = {
+                            Switch(
+                                checked = paymentAlertsEnabled,
+                                enabled = paymentDetectionEnabled,
+                                onCheckedChange = { enabled ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setPaymentAlertsEnabled(enabled)
+                                    if (enabled) requestPostNotifications()
+                                },
+                                modifier = Modifier.testTag("payment_alerts_switch")
+                            )
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "Daily review reminder",
+                        subtitle = "At 9 PM, remind me if today’s payments are still unrecorded",
+                        leading = { SettingsTileIcon(Icons.Default.Schedule, "Reminder") },
+                        trailing = {
+                            Switch(
+                                checked = dailyReviewReminderEnabled,
+                                enabled = paymentDetectionEnabled,
+                                onCheckedChange = { enabled ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setDailyReviewReminderEnabled(enabled)
+                                    if (enabled) requestPostNotifications()
+                                },
+                                modifier = Modifier.testTag("daily_reminder_switch")
+                            )
                         }
                     )
                 }
@@ -1900,299 +2159,65 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
 
             // === Destination 4: Manage Categories Screen ===
             composable("categories") {
-                var selectedTypeTab by remember { mutableStateOf("EXPENSE") }
-                val expenseCount = categories.count { it.type == "EXPENSE" }
-                val incomeCount = categories.count { it.type == "INCOME" }
-                val isExpenseTab = selectedTypeTab == "EXPENSE"
-                val currentTypeBudget = categories.filter { it.type == selectedTypeTab }.sumOf { it.budgetLimit }
-                val currentTypeCount = if (isExpenseTab) expenseCount else incomeCount
-                
-                val categoryOrder = remember(categories) {
-                    mutableStateListOf<Int>().apply {
-                        addAll(categories.map { it.id })
+                ManageCategoriesScreen(
+                    categories = categories,
+                    subcategories = subcategories,
+                    stats = stats,
+                    currencySymbol = currencySymbol,
+                    selectedType = categoriesTypeTab,
+                    onSelectType = { categoriesTypeTab = it },
+                    customOrder = categoryCustomOrder,
+                    onBack = { navController.popBackStack() },
+                    onAddCategory = {
+                        addCategoryDefaultType = categoriesTypeTab
+                        showAddCategoryDialog = true
+                    },
+                    onEditCategory = { editCategoryTarget = it },
+                    onDeleteCategory = { categoryToDelete = it }
+                )
+            }
+
+            // === Spending calendar: month grid -> one day by category -> one category's records ===
+            composable("calendar") {
+                SpendingCalendarScreen(
+                    transactions = transactions,
+                    categories = categories,
+                    month = selectedMonth,
+                    currencySymbol = currencySymbol,
+                    onMonthChange = { viewModel.selectMonth(it) },
+                    onPickMonth = { showMonthPickerSheet = true },
+                    onBack = { navController.popBackStack() },
+                    onOpenDay = { date -> navController.navigate("calendar_day/${date.toEpochDay()}") }
+                )
+            }
+
+            composable("calendar_day/{epochDay}") { backStackEntry ->
+                val epochDay = backStackEntry.arguments?.getString("epochDay")?.toLongOrNull() ?: LocalDate.now().toEpochDay()
+                CalendarDayDetailScreen(
+                    date = LocalDate.ofEpochDay(epochDay),
+                    transactions = transactions,
+                    categories = categories,
+                    currencySymbol = currencySymbol,
+                    onBack = { navController.popBackStack() },
+                    onOpenCategory = { type, categoryId ->
+                        navController.navigate("calendar_day/$epochDay/$type/$categoryId")
                     }
-                }
-                
-                val sortedCategories = remember(categories, categoryOrder) {
-                    val ordered = categoryOrder.mapNotNull { id -> categories.find { it.id == id } }
-                    val remaining = categories.filter { it.id !in categoryOrder }
-                    ordered + remaining
-                }
+                )
+            }
 
-                val typedCategories = remember(sortedCategories, selectedTypeTab) {
-                    sortedCategories.filter { it.type.equals(selectedTypeTab, ignoreCase = true) }
-                }
-
-                var searchQuery by remember { mutableStateOf("") }
-                val filteredCategories = remember(typedCategories, searchQuery) {
-                    if (searchQuery.isBlank()) {
-                        typedCategories
-                    } else {
-                        typedCategories.filter { it.name.contains(searchQuery, ignoreCase = true) }
-                    }
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Header / Back navigation row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { navController.popBackStack() },
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Go back")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Manage Categories",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Expense vs Income Type Toggle Tabs
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val tabs = listOf(
-                            "EXPENSE" to "Expense Categories ($expenseCount)",
-                            "INCOME" to "Income Categories ($incomeCount)"
-                        )
-                        tabs.forEach { (typeVal, label) ->
-                            val isSelected = selectedTypeTab == typeVal
-                            val activeColor = if (typeVal == "INCOME") Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (isSelected) activeColor.copy(alpha = 0.15f) else Color.Transparent)
-                                    .border(
-                                        width = if (isSelected) 1.5.dp else 0.dp,
-                                        color = if (isSelected) activeColor else Color.Transparent,
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .clickable { selectedTypeTab = typeVal }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) activeColor else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    // Step 5.1: Beautiful summary header card
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("categories_summary_card"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isExpenseTab) {
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                            } else {
-                                Color(0xFF2E7D32).copy(alpha = 0.12f)
-                            }
-                        ),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isExpenseTab) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color(0xFF2E7D32).copy(alpha = 0.3f)
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = if (isExpenseTab) "Monthly Expense Budget" else "Monthly Income Target",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isExpenseTab) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f) else Color(0xFF2E7D32)
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = formatInRupee(currentTypeBudget, currencySymbol),
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Black,
-                                    color = if (isExpenseTab) MaterialTheme.colorScheme.onPrimaryContainer else Color(0xFF1B5E20)
-                                )
-                            }
-                            
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isExpenseTab) MaterialTheme.colorScheme.primary else Color(0xFF2E7D32)
-                                ),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = currentTypeCount.toString(),
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = if (isExpenseTab) "Expenses" else "Incomes",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White.copy(alpha = 0.85f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = "Customize colors, change budgets, or modify subcategories. Values are color-mapped instantly across transaction lists and charts.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Button(
-                        onClick = {
-                            addCategoryDefaultType = selectedTypeTab
-                            showAddCategoryDialog = true
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("categories_screen_add_btn"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isExpenseTab) MaterialTheme.colorScheme.primary else Color(0xFF2E7D32)
-                        )
-                    ) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add New Category")
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isExpenseTab) "Add Expense Category" else "Add Income Category",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Step 5.3: Dynamic search field displayed if more than 8 categories
-                    if (categories.size > 8) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("categories_search_input"),
-                            placeholder = { Text("Search categories...") },
-                            leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search icon") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(imageVector = Icons.Default.Close, contentDescription = "Clear search")
-                                    }
-                                }
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                            )
-                        )
-                    }
-
-                    // Grid / List header section
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (searchQuery.isNotEmpty()) "Search Results (${filteredCategories.size})" else "Active Categories (${filteredCategories.size})",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        if (filteredCategories.size > 1 && searchQuery.isEmpty()) {
-                            Text(
-                                text = "Use arrows to reorder",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                        }
-                    }
-
-                    if (filteredCategories.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (searchQuery.isNotEmpty()) "No matching categories found." else "No categories. Click above to add some!",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                        }
-                    } else {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            filteredCategories.forEachIndexed { index, category ->
-                                val statsInfo = stats[category.id]
-                                val relatedSubs = subcategories.filter { it.parentCategoryId == category.id }
-                                
-                                UpgradedManageCategoryCard(
-                                    category = category,
-                                    stats = statsInfo,
-                                    subcategories = relatedSubs,
-                                    currencySymbol = currencySymbol,
-                                    canMoveUp = index > 0 && searchQuery.isEmpty(),
-                                    canMoveDown = index < filteredCategories.size - 1 && searchQuery.isEmpty(),
-                                    onMoveUp = {
-                                        val actualIndex = categoryOrder.indexOf(category.id)
-                                        if (actualIndex > 0) {
-                                            val prevId = categoryOrder[actualIndex - 1]
-                                            categoryOrder[actualIndex - 1] = category.id
-                                            categoryOrder[actualIndex] = prevId
-                                        }
-                                    },
-                                    onMoveDown = {
-                                        val actualIndex = categoryOrder.indexOf(category.id)
-                                        if (actualIndex >= 0 && actualIndex < categoryOrder.size - 1) {
-                                            val nextId = categoryOrder[actualIndex + 1]
-                                            categoryOrder[actualIndex + 1] = category.id
-                                            categoryOrder[actualIndex] = nextId
-                                        }
-                                    },
-                                    onEdit = { editCategoryTarget = category },
-                                    onDelete = { categoryToDelete = category }
-                                )
-                            }
-                        }
-                    }
-                }
+            composable("calendar_day/{epochDay}/{type}/{categoryId}") { backStackEntry ->
+                val args = backStackEntry.arguments
+                val epochDay = args?.getString("epochDay")?.toLongOrNull() ?: LocalDate.now().toEpochDay()
+                CalendarCategoryTransactionsScreen(
+                    date = LocalDate.ofEpochDay(epochDay),
+                    type = args?.getString("type") ?: "EXPENSE",
+                    categoryId = args?.getString("categoryId")?.toIntOrNull() ?: 0,
+                    transactions = transactions,
+                    categories = categories,
+                    subcategories = subcategories,
+                    currencySymbol = currencySymbol,
+                    onBack = { navController.popBackStack() }
+                )
             }
 
             composable("onboarding") {
@@ -2247,8 +2272,8 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             viewModel = viewModel,
             initialType = addCategoryDefaultType,
             onDismiss = { showAddCategoryDialog = false },
-            onSave = { name, colorHex, icon, budget, subsList, catType ->
-                viewModel.addCategory(name, colorHex, icon, budget, subsList.map { it.name }, catType)
+            onSave = { name, colorHex, icon, budget, subsList, catType, role ->
+                viewModel.addCategory(name, colorHex, icon, budget, subsList, catType, role)
                 showAddCategoryDialog = false
                 Toast.makeText(context, "Category added successfully!", Toast.LENGTH_SHORT).show()
             }
@@ -2264,15 +2289,20 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
             initialType = category.type,
             subcategories = currentSubs,
             onDismiss = { editCategoryTarget = null },
-            onSave = { name, colorHex, icon, budget, subsListWithColor, catType ->
+            onDelete = {
+                editCategoryTarget = null
+                categoryToDelete = category
+            },
+            onSave = { name, colorHex, icon, budget, subsList, catType, role ->
                 viewModel.editCategory(
                     id = category.id,
                     name = name,
                     colorHex = colorHex,
                     iconName = icon,
                     budget = budget,
-                    subcategoriesList = subsListWithColor.map { it.name to it.colorHexOverride },
-                    type = catType
+                    subcategoriesList = subsList,
+                    type = catType,
+                    role = role
                 )
                 editCategoryTarget = null
                 Toast.makeText(context, "Category updated!", Toast.LENGTH_SHORT).show()
@@ -2298,6 +2328,19 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                 showAddTransactionDialog = false
                 transactionToEdit = null
             },
+            lendingContacts = lendingContacts,
+            onSaveLending = { contactId, newName, amount, desc, timestamp, direction ->
+                val editTx = transactionToEdit
+                if (editTx == null) {
+                    viewModel.recordLending(contactId, newName, amount, desc, timestamp, direction)
+                } else {
+                    // Reclassifying an ordinary record moves it into the lending ledger
+                    viewModel.convertTransactionToLending(editTx, contactId, newName, amount, desc, timestamp, direction)
+                }
+                Toast.makeText(context, "Saved to Lending", Toast.LENGTH_SHORT).show()
+                showAddTransactionDialog = false
+                transactionToEdit = null
+            },
             onSave = { catId, subId, amount, desc, timestamp, type ->
                 val editTx = transactionToEdit
                 if (editTx == null) {
@@ -2309,6 +2352,43 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                 }
                 showAddTransactionDialog = false
                 transactionToEdit = null
+            }
+        )
+    }
+
+    // Record a Money Inbox draft: the same add-record dialog, prefilled from the notification
+    inboxDraftTarget?.let { payment ->
+        // Guess refund / loan / repayment from the alert text and the lending contacts
+        val suggestion = remember(payment, lendingContacts) { viewModel.inboxSuggestion(payment) }
+        AddTransactionDialog(
+            categories = categories,
+            subcategories = subcategories,
+            prefill = remember(payment, categories, suggestion) { viewModel.draftTransactionFor(payment, suggestion.first) },
+            defaultType = payment.transactionType,
+            transactions = transactions,
+            kinds = RecordKind.forDirection(sent = payment.isSent),
+            initialKind = suggestion.first,
+            lendingContacts = lendingContacts,
+            initialContactId = suggestion.second?.id,
+            onCreateCategoryFirstClick = {
+                inboxDraftTarget = null
+                navController.navigate("categories")
+            },
+            onDismiss = { inboxDraftTarget = null },
+            onSaveLending = { contactId, newName, amount, desc, timestamp, direction ->
+                viewModel.recordDetectedPaymentAsLending(payment.id, contactId, newName, amount, desc, timestamp, direction)
+                inboxDraftTarget = null
+                Toast.makeText(context, "Saved to Lending", Toast.LENGTH_SHORT).show()
+            },
+            onSave = { catId, subId, amount, desc, timestamp, type ->
+                viewModel.recordDetectedPayment(payment.id, catId, subId, amount, desc, timestamp, type)
+                inboxDraftTarget = null
+                val message = when (type) {
+                    TxType.INCOME -> "Added to income!"
+                    TxType.REFUND -> "Refund recorded!"
+                    else -> "Payment recorded!"
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -2364,10 +2444,11 @@ fun CategoryColorManagerApp(viewModel: CategoryViewModel) {
                     items(recordedMonths) { month ->
                         val isSelected = month == selectedMonth
                         val isCurrent = month == currentCalendarMonth
-                        val monthSpend = remember(transactions, month) {
-                            transactions
-                                .filter { it.type == "EXPENSE" && YearMonth.from(Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault())) == month }
-                                .sumOf { it.amount }
+                        val monthSpend = remember(transactions, month, categoriesById) {
+                            summarizeFlow(
+                                transactions.filter { YearMonth.from(Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault())) == month },
+                                categoriesById
+                            ).realSpend
                         }
                         val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
 
@@ -3199,8 +3280,13 @@ fun TypeFilterPill(
  * Buckets the month's expenses into 9 equal slices of days for the header sparkline.
  * Returns an empty list when there is nothing to plot so the caller can skip the chart.
  */
-fun buildSpendSparkline(monthTransactions: List<Transaction>, month: YearMonth, buckets: Int = 9): List<Double> {
-    val expenses = monthTransactions.filter { it.type == "EXPENSE" }
+fun buildSpendSparkline(
+    monthTransactions: List<Transaction>,
+    month: YearMonth,
+    categoriesById: Map<Int, Category>,
+    buckets: Int = 9
+): List<Double> {
+    val expenses = monthTransactions.filter { it.flowKind(categoriesById[it.categoryId]) == FlowKind.SPEND }
     if (expenses.isEmpty()) return emptyList()
 
     val zone = ZoneId.systemDefault()
@@ -3360,7 +3446,10 @@ fun InsightsSummaryCard(
     lastPeriodSpend: Double,
     currencySymbol: String,
     sparkline: List<Double>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    flow: FlowSummary? = null,
+    onExplainNotCounted: () -> Unit = {},
+    onCalendarClick: (() -> Unit)? = null
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
@@ -3487,12 +3576,33 @@ fun InsightsSummaryCard(
                 modifier = Modifier.width(132.dp),
                 horizontalAlignment = Alignment.End
             ) {
-                SpendRhythmBars(
-                    values = sparkline,
-                    modifier = Modifier
-                        .padding(end = 4.dp)
-                        .size(width = 78.dp, height = 52.dp)
-                )
+                Row(verticalAlignment = Alignment.Top) {
+                    SpendRhythmBars(
+                        values = sparkline,
+                        modifier = Modifier
+                            .padding(end = 4.dp)
+                            .size(width = if (onCalendarClick != null) 72.dp else 78.dp, height = 52.dp)
+                    )
+                    // Opens the spending calendar: daily totals, then category and record drill-down
+                    if (onCalendarClick != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .liquidGlass(shape = RoundedCornerShape(13.dp), strength = 0.9f, elevation = 4.dp)
+                                .clickable(onClick = onCalendarClick)
+                                .testTag("insights_calendar_btn"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarMonth,
+                                contentDescription = "Open spending calendar",
+                                tint = accent,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier
@@ -3516,6 +3626,15 @@ fun InsightsSummaryCard(
                     )
                 }
             }
+        }
+        if (flow != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            MoneyFlowStrip(
+                flow = flow,
+                currencySymbol = currencySymbol,
+                onExplain = onExplainNotCounted,
+                modifier = Modifier.padding(end = 4.dp)
+            )
         }
     }
 }
@@ -4537,6 +4656,7 @@ fun DetailedStatsPanel(
     category: Category,
     stats: CategoryStats,
     currencySymbol: String = "₹",
+    previousNoun: String = "Last Month",
     onClear: () -> Unit
 ) {
     val panelShape = RoundedCornerShape(20.dp)
@@ -4645,7 +4765,7 @@ fun DetailedStatsPanel(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Trend vs Last Month:",
+                        text = "Trend vs $previousNoun:",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -4660,232 +4780,6 @@ fun DetailedStatsPanel(
                     fontWeight = FontWeight.Black,
                     color = if (stats.trendPercentage >= 0.0) Color(0xFF6BCB77) else Color(0xFFFF6B6B)
                 )
-            }
-        }
-    }
-}
-
-// Visual Component: Upgraded Manage Category Card
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun UpgradedManageCategoryCard(
-    category: Category,
-    stats: CategoryStats?,
-    subcategories: List<Subcategory>,
-    currencySymbol: String,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val budget = category.budgetLimit
-    val spent = stats?.totalAmount ?: 0.0
-    val ratio = if (budget > 0.0) (spent / budget).toFloat() else 0f
-    val isOverBudget = spent > budget && budget > 0.0
-    val catColor = parseHexColor(category.colorHex)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("category_card_${category.id}"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, catColor.copy(alpha = 0.25f))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Row 1: Header (Icon, Name, Reorder/Edit/Delete actions)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(catColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = getIconVector(category.iconName),
-                            contentDescription = null,
-                            tint = getContrastColor(category.colorHex),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = category.displayName,
-                            fontWeight = FontWeight.ExtraBold,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "${subcategories.size} Subcategories",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-
-                // Small quick reorder and edits panel
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // Reorder controls
-                    IconButton(
-                        onClick = onMoveUp,
-                        enabled = canMoveUp,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowUp,
-                            contentDescription = "Move Up",
-                            tint = if (canMoveUp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = onMoveDown,
-                        enabled = canMoveDown,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Move Down",
-                            tint = if (canMoveDown) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    // Divider
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .height(24.dp)
-                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    )
-
-                    // Edit / Delete controls
-                    IconButton(
-                        onClick = onEdit,
-                        modifier = Modifier.size(48.dp).testTag("edit_category_btn_${category.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit Category",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    val isSystemCategory = category.name == "Lending" || category.name == "Loan Repayment"
-                    if (!isSystemCategory) {
-                        IconButton(
-                            onClick = onDelete,
-                            modifier = Modifier.size(48.dp).testTag("delete_category_btn_${category.id}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete Category",
-                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Row 2: Subcategories chips
-            if (subcategories.isNotEmpty()) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    subcategories.forEach { sub ->
-                        val subColor = parseHexColor(sub.colorHexOverride ?: category.colorHex)
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(subColor.copy(alpha = 0.1f))
-                                .border(1.dp, subColor.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(subColor)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = sub.name,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Divider
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-            // Row 3: Budget progress & stats meters
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (budget > 0.0) "Monthly Limit: ${formatInRupee(budget, currencySymbol)}" else "No Limit Set",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Spent: ${formatInRupee(spent, currencySymbol)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Black,
-                        color = if (isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                LinearProgressIndicator(
-                    progress = { ratio.coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = if (isOverBudget) MaterialTheme.colorScheme.error else catColor,
-                    trackColor = catColor.copy(alpha = 0.15f)
-                )
-
-                if (budget > 0.0) {
-                    val percentLeft = ((1.0 - ratio) * 100).coerceAtLeast(0.0)
-                    Text(
-                        text = if (isOverBudget) "Over budget limits!" else String.format("%.1f%% of budget pool remaining", percentLeft),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isOverBudget) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
-                    )
-                }
             }
         }
     }
@@ -5125,7 +5019,8 @@ fun TransactionItemRow(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = getIconVector(category?.iconName ?: "help"),
+                    imageVector = if (subcategory != null) subcategoryIconVector(subcategory, category)
+                                  else getIconVector(category?.iconName ?: "help"),
                     contentDescription = category?.displayName ?: "Unknown category",
                     tint = getContrastColor(visualColor),
                     modifier = Modifier.size(19.dp)
@@ -5179,8 +5074,14 @@ fun TransactionItemRow(
                     )
                 }
 
-                // Lending badge stays a chip: it marks a row that cannot be edited here
-                if (isLendingLinked) {
+                // Rows that don't count as plain spending / income carry a small chip saying why
+                val flowBadge = when {
+                    isLendingLinked || category?.isLending == true -> "Lending"
+                    transaction.isRefund -> "Refund"
+                    category?.countsInTotals == false -> "Not counted"
+                    else -> null
+                }
+                if (flowBadge != null) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Surface(
                         shape = RoundedCornerShape(6.dp),
@@ -5189,7 +5090,7 @@ fun TransactionItemRow(
                         modifier = Modifier.testTag("lending_badge_${transaction.id}")
                     ) {
                         Text(
-                            text = "Lending",
+                            text = flowBadge,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.primary,
@@ -5203,7 +5104,7 @@ fun TransactionItemRow(
         Spacer(modifier = Modifier.width(8.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            val isIncome = transaction.type == "INCOME"
+            val isIncome = transaction.isInflow
             val prefix = if (isIncome) "+" else "-"
             val amountColor = if (isIncome) IncomeGreen else ExpenseRed
             Text(
@@ -5231,379 +5132,6 @@ fun TransactionItemRow(
     }
 }
 
-// Subcategory Edit row data class helper
-data class SubcategoryEditorItem(
-    val id: Int = 0,
-    val name: String,
-    val colorHexOverride: String? = null
-)
-
-// Modal Window: Category Form Editor with unique constraints & smart suggestions
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun CategoryEditorDialog(
-    viewModel: CategoryViewModel,
-    category: Category? = null,
-    initialType: String = "EXPENSE",
-    subcategories: List<Subcategory> = emptyList(),
-    onDismiss: () -> Unit,
-    onSave: (name: String, colorHex: String, iconName: String, budget: Double, subcategories: List<SubcategoryEditorItem>, type: String) -> Unit
-) {
-    val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
-    var name by remember { mutableStateOf(category?.name ?: "") }
-    var colorHex by remember { mutableStateOf(category?.colorHex ?: "") }
-    var iconName by remember { mutableStateOf(category?.iconName ?: "restaurant") }
-    var budgetStr by remember { mutableStateOf(category?.budgetLimit?.toInt()?.toString() ?: "") }
-    var categoryType by remember { mutableStateOf(category?.type ?: initialType) }
-
-    // Subcategories listing inside editor
-    val subList = remember {
-        mutableStateListOf<SubcategoryEditorItem>().apply {
-            addAll(subcategories.map { SubcategoryEditorItem(it.id, it.name, it.colorHexOverride) })
-        }
-    }
-    var newSubcategoryName by remember { mutableStateOf("") }
-
-    // Validation & Warning status holding
-    var isDuplicateError by remember { mutableStateOf(false) }
-    var similarityWarning by remember { mutableStateOf<String?>(null) }
-    
-    // Auto color recommendation palette suggestions
-    val smartSuggestions = remember(viewModel.categories.collectAsStateWithLifecycle().value, viewModel.currentPaletteTheme.collectAsStateWithLifecycle().value) {
-        viewModel.getSmartColorSuggestions()
-    }
-
-    // Set initial auto suggested color if creating new category and none picked
-    LaunchedEffect(smartSuggestions, colorHex) {
-        if (category == null && colorHex.isEmpty() && smartSuggestions.isNotEmpty()) {
-            colorHex = smartSuggestions.first()
-        }
-    }
-
-    // Checking validation constraints on color choice
-    LaunchedEffect(colorHex) {
-        if (colorHex.isNotEmpty()) {
-            isDuplicateError = viewModel.isColorAlreadyAssigned(colorHex, category?.id)
-            val similarity = viewModel.isColorTooSimilar(colorHex, category?.id)
-            similarityWarning = if (similarity.first) similarity.second else null
-        } else {
-            isDuplicateError = false
-            similarityWarning = null
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(8.dp, RoundedCornerShape(20.dp))
-                .testTag("category_editor_dialog"),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(18.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = if (category == null) "Create Category" else "Update Category",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                // Category Type Selection (Expense vs Income)
-                Text(
-                    text = "Category Type",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    val types = listOf("EXPENSE" to "Expense", "INCOME" to "Income")
-                    types.forEach { (typeVal, label) ->
-                        val isSelected = categoryType == typeVal
-                        val activeColor = if (typeVal == "INCOME") Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (isSelected) activeColor.copy(alpha = 0.15f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                                )
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) activeColor else Color.LightGray.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .clickable { categoryType = typeVal }
-                                .padding(vertical = 10.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSelected) activeColor else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-
-                // Name field
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Category Name") },
-                    modifier = Modifier.fillMaxWidth().testTag("cat_name_input"),
-                    singleLine = true
-                )
-
-                // Budget Limit field
-                OutlinedTextField(
-                    value = budgetStr,
-                    onValueChange = { budgetStr = it },
-                    label = { Text("Budget Limit (₹)") },
-                    modifier = Modifier.fillMaxWidth().testTag("cat_budget_input"),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true
-                )
-
-                // Theme Icons Selector grid
-                Text(
-                    text = "Category Icon",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ICON_OPTIONS.forEach { icon ->
-                        val isSelected = iconName == icon
-                        IconButton(
-                            onClick = { iconName = icon },
-                            colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                            ),
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(
-                                imageVector = getIconVector(icon),
-                                contentDescription = icon,
-                                modifier = Modifier.size(24.dp),
-                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-
-                // Pick Custom Color hex representation
-                OutlinedTextField(
-                    value = colorHex,
-                    onValueChange = { colorHex = it },
-                    label = { Text("Category Theme Color Hex") },
-                    isError = isDuplicateError,
-                    modifier = Modifier.fillMaxWidth().testTag("cat_color_input"),
-                    placeholder = { Text("#FF6B6B") },
-                    trailingIcon = {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(parseHexColor(colorHex))
-                        )
-                    },
-                    singleLine = true
-                )
-
-                // Error Warning Prompts
-                if (isDuplicateError) {
-                    Text(
-                        text = "This color is already assigned to another category.",
-                        color = Color.Red,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.testTag("duplicate_color_warning")
-                    )
-                } else if (similarityWarning != null) {
-                    Text(
-                        text = "Warning: Color distance is close to existing Category: '$similarityWarning'. Choosing a more distinct shade is recommended for readability.",
-                        color = Color(0xFFD48A00),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.testTag("similarity_color_warning")
-                    )
-                }
-
-                // Smart Color Suggestions grid
-                Text(
-                    text = "Smart Recommended Colors (Theme Palette)",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    smartSuggestions.forEach { suggestion ->
-                        val isSelected = colorHex.uppercase() == suggestion.uppercase()
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(parseHexColor(suggestion))
-                                .border(
-                                    width = if (isSelected) 3.dp else 1.dp,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else Color.LightGray.copy(alpha = 0.5f),
-                                    shape = CircleShape
-                                )
-                                .clickable { colorHex = suggestion }
-                        )
-                    }
-                }
-
-                // Subcategories Creation Row
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                Text(
-                    text = "Manage Subcategories",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Simple mini subcategory adder
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = newSubcategoryName,
-                        onValueChange = { newSubcategoryName = it },
-                        label = { Text("Subcategory Name") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Button(
-                        onClick = {
-                            if (newSubcategoryName.isNotBlank()) {
-                                // Automatically allocate lighter shade factor based on index
-                                val shades = viewModel.getLighterShades(colorHex)
-                                val shadeOverride = if (subList.size < shades.size) shades[subList.size] else shades.last()
-                                subList.add(SubcategoryEditorItem(name = newSubcategoryName, colorHexOverride = shadeOverride))
-                                newSubcategoryName = ""
-                            }
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text("Add", fontSize = 11.sp)
-                    }
-                }
-
-                // Temporary list displays
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    subList.forEachIndexed { index, subitem ->
-                        val resolvedSubColor = subitem.colorHexOverride ?: colorHex
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.LightGray.copy(alpha = 0.15f))
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(parseHexColor(resolvedSubColor))
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(subitem.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                            }
-
-                            // Subcategory lighter shades customize pallet picker! Shows visual gradient
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                val shadesOfParent = viewModel.getLighterShades(colorHex)
-                                shadesOfParent.forEach { shade ->
-                                    val isSelectedValue = shade.uppercase() == resolvedSubColor.uppercase()
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(horizontal = 2.dp)
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .background(parseHexColor(shade))
-                                            .border(
-                                                width = if (isSelectedValue) 1.5.dp else 0.dp,
-                                                color = Color.Black,
-                                                shape = CircleShape
-                                            )
-                                            .clickable {
-                                                subList[index] = subitem.copy(colorHexOverride = shade)
-                                            }
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(6.dp))
-                                IconButton(
-                                    onClick = { subList.remove(subitem) },
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = Color.Red
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Interactive save control actions
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel")
-                    }
-                    Button(
-                        onClick = {
-                            if (name.isNotBlank() && colorHex.isNotBlank() && !isDuplicateError) {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val budgetValue = budgetStr.toDoubleOrNull() ?: 0.0
-                                onSave(name, colorHex, iconName, budgetValue, subList.toList(), categoryType)
-                            }
-                        },
-                        enabled = name.isNotBlank() && colorHex.isNotBlank() && !isDuplicateError,
-                        modifier = Modifier.testTag("save_category_submit_btn")
-                    ) {
-                        Text("Save")
-                    }
-                }
-            }
-        }
-    }
-}
-
 // Modal Window: Tract transactions form dialog
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -5611,28 +5139,51 @@ fun AddTransactionDialog(
     categories: List<Category>,
     subcategories: List<Subcategory>,
     transaction: Transaction? = null,
+    prefill: Transaction? = null, // seeds a *new* record (e.g. a Money Inbox draft) without entering edit mode
     defaultType: String = "EXPENSE",
     transactions: List<Transaction> = emptyList(),
     defaultMonth: YearMonth? = null,
+    // "What is this?" choices on offer, and the one to start on (otherwise derived from the seed)
+    kinds: List<RecordKind> = RecordKind.entries,
+    initialKind: RecordKind? = null,
+    lendingContacts: List<LendingContact> = emptyList(),
+    initialContactId: Int? = null,
     onCreateCategoryFirstClick: () -> Unit,
     onDismiss: () -> Unit,
+    // Lent / Got back records go to the lending ledger; without this callback those choices are hidden
+    onSaveLending: ((contactId: Int?, newContactName: String?, amount: Double, desc: String, timestamp: Long, direction: String) -> Unit)? = null,
     onSave: (catId: Int, subId: Int?, amount: Double, desc: String, timestamp: Long, type: String) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
-    var amountStr by remember { mutableStateOf(transaction?.amount?.toString() ?: "") }
-    var desc by remember { mutableStateOf(transaction?.description ?: "") }
-    val initialType = transaction?.type ?: defaultType
-    var selectedType by remember { mutableStateOf(initialType) }
-    val filteredCategories = remember(categories, selectedType) {
-        categories.filter { it.type.equals(selectedType, ignoreCase = true) }
+    val seed = transaction ?: prefill
+    var amountStr by remember { mutableStateOf(seed?.amount?.let { formatAmountInput(it) } ?: "") }
+    var desc by remember { mutableStateOf(seed?.description ?: "") }
+    val availableKinds = remember(kinds, onSaveLending) {
+        kinds.filter { !it.isLending || onSaveLending != null }
+    }
+    val startKind = remember {
+        val seededKind = initialKind
+            ?: seed?.recordKind(categories.find { it.id == seed.categoryId })
+            ?: if (defaultType == "INCOME") RecordKind.INCOME else RecordKind.EXPENSE
+        seededKind.takeIf { it in availableKinds } ?: availableKinds.first()
+    }
+    var selectedKind by remember { mutableStateOf(startKind) }
+    val filteredCategories = remember(categories, selectedKind) {
+        categories.filter { selectedKind.accepts(it) }
     }
     var selectedCatId by remember {
-        val initialCats = categories.filter { it.type.equals(initialType, ignoreCase = true) }
-        mutableStateOf<Int?>(transaction?.categoryId ?: initialCats.firstOrNull()?.id)
+        val initialCats = categories.filter { startKind.accepts(it) }
+        val seededCat = seed?.categoryId?.takeIf { id -> initialCats.any { it.id == id } }
+        mutableStateOf<Int?>(seededCat ?: initialCats.firstOrNull()?.id)
     }
-    var selectedSubId by remember { mutableStateOf<Int?>(transaction?.subcategoryId) }
+    val selectedType = selectedKind.transactionType(categories.find { it.id == selectedCatId })
+    var selectedContactId by remember { mutableStateOf(initialContactId) }
+    var newContactName by remember { mutableStateOf("") }
+    var addingNewContact by remember { mutableStateOf(initialContactId == null && lendingContacts.isEmpty()) }
+    val hasLendingTarget = selectedContactId != null || (addingNewContact && newContactName.isNotBlank())
+    var selectedSubId by remember { mutableStateOf<Int?>(seed?.subcategoryId) }
     var timestamp by remember {
-        val initialTimestamp = transaction?.timestamp ?: run {
+        val initialTimestamp = seed?.timestamp ?: run {
             if (defaultMonth != null && defaultMonth != YearMonth.now()) {
                 val day = java.time.LocalDate.now().dayOfMonth.coerceIn(1, defaultMonth.lengthOfMonth())
                 defaultMonth.atDay(day).atTime(12, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -5651,16 +5202,16 @@ fun AddTransactionDialog(
             desc = it.description
             selectedCatId = it.categoryId
             selectedSubId = it.subcategoryId
-            selectedType = it.type
+            selectedKind = it.recordKind(categories.find { c -> c.id == it.categoryId })
             timestamp = it.timestamp
         }
     }
 
-    // Clear selected category if it doesn't match the new transaction type
-    LaunchedEffect(selectedType) {
+    // Clear selected category if it doesn't fit the newly chosen kind
+    LaunchedEffect(selectedKind) {
         if (selectedCatId != null) {
             val currentCat = categories.find { it.id == selectedCatId }
-            if (currentCat == null || !currentCat.type.equals(selectedType, ignoreCase = true)) {
+            if (currentCat == null || !selectedKind.accepts(currentCat)) {
                 selectedCatId = null
                 selectedSubId = null
             }
@@ -5729,53 +5280,33 @@ fun AddTransactionDialog(
                     color = MaterialTheme.colorScheme.onSurface
                 )
 
-                // Type Segment selection
+                // What is this? Spending / income, plus the kinds that stay out of totals
                 Text(
-                    text = "Record Type",
+                    text = "What is this?",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.outline
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth().testTag("tx_kind_selector"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val types = listOf("EXPENSE" to "Expense", "INCOME" to "Income")
-                    types.forEach { (typeVal, label) ->
-                        val isSelected = selectedType == typeVal
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (isSelected) {
-                                        if (typeVal == "INCOME") Color(0xFF2E7D32).copy(alpha = 0.15f)
-                                        else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                    } else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                                )
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) {
-                                        if (typeVal == "INCOME") Color(0xFF2E7D32)
-                                        else MaterialTheme.colorScheme.primary
-                                    } else Color.LightGray.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .clickable { selectedType = typeVal }
-                                .padding(vertical = 12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSelected) {
-                                    if (typeVal == "INCOME") Color(0xFF2E7D32)
-                                    else MaterialTheme.colorScheme.primary
-                                } else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                    availableKinds.forEach { kind ->
+                        RecordKindChip(
+                            kind = kind,
+                            selected = selectedKind == kind,
+                            onClick = { selectedKind = kind }
+                        )
                     }
+                }
+                recordKindHint(selectedKind)?.let { hint ->
+                    Text(
+                        text = hint,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 // Amount
@@ -5938,6 +5469,17 @@ fun AddTransactionDialog(
                     }
                 }
 
+                if (selectedKind.isLending) {
+                    LendingContactPicker(
+                        contacts = lendingContacts,
+                        selectedContactId = selectedContactId,
+                        addingNew = addingNewContact,
+                        newName = newContactName,
+                        onSelect = { selectedContactId = it; addingNewContact = false },
+                        onStartNew = { selectedContactId = null; addingNewContact = true },
+                        onNewNameChange = { newContactName = it }
+                    )
+                } else {
                  // Parent Category Selection
                 Text(
                     text = "Select Category",
@@ -5959,7 +5501,11 @@ fun AddTransactionDialog(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "No ${if (selectedType == "INCOME") "income" else "expense"} categories available.",
+                            text = when (selectedKind) {
+                                RecordKind.TRANSFER -> "No transfer categories yet. Turn on \"Don't count in totals\" on a category to use it here."
+                                RecordKind.INCOME -> "No income categories available."
+                                else -> "No expense categories available."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -6069,7 +5615,7 @@ fun AddTransactionDialog(
                                     .padding(horizontal = 10.dp, vertical = 6.dp)
                             ) {
                                 Icon(
-                                    imageVector = getSubcategoryIcon(sub.name),
+                                    imageVector = subcategoryIconVector(sub, categories.find { it.id == selectedCatId }),
                                     contentDescription = sub.name,
                                     tint = if (isSelected) getContrastColor(subColorHex) else subColor,
                                     modifier = Modifier.size(14.dp)
@@ -6086,6 +5632,8 @@ fun AddTransactionDialog(
                     }
                 }
 
+                }
+
                 // Modal submission control actions
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -6098,12 +5646,22 @@ fun AddTransactionDialog(
                     Button(
                         onClick = {
                             val amount = amountStr.trim().toDoubleOrNull() ?: 0.0
-                            if (amount > 0.0 && selectedCatId != null) {
+                            if (amount > 0.0 && selectedKind.isLending && hasLendingTarget) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSaveLending?.invoke(
+                                    selectedContactId,
+                                    newContactName.trim().takeIf { selectedContactId == null && it.isNotEmpty() },
+                                    amount,
+                                    desc,
+                                    timestamp,
+                                    if (selectedKind == RecordKind.LENT) "LENT" else "REPAID"
+                                )
+                            } else if (amount > 0.0 && !selectedKind.isLending && selectedCatId != null) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onSave(selectedCatId!!, selectedSubId, amount, desc, timestamp, selectedType)
                             }
                         },
-                        enabled = isAmountValid && selectedCatId != null,
+                        enabled = isAmountValid && (if (selectedKind.isLending) hasLendingTarget else selectedCatId != null),
                         modifier = Modifier.testTag("save_transaction_submit_btn")
                     ) {
                         Text("Save")

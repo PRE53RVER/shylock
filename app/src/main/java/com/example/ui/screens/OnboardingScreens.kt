@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.GlassSegmentedControl
+import com.example.data.model.Subcategory
 import com.example.formatInRupee
 import com.example.getContrastColor
 import com.example.getIconVector
@@ -212,7 +213,7 @@ fun OnboardingWizard(
                 colorHex = colorHexFor(cat),
                 iconName = cat.iconName,
                 budget = cat.budget,
-                subcategoriesList = cat.subcategories,
+                subcategoriesList = cat.subcategories.map { Subcategory(parentCategoryId = 0, name = it) },
                 type = cat.type
             )
         }
